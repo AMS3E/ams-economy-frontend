@@ -20,7 +20,7 @@
 // module reads cookies for its token, and dragging next/headers into the
 // public graph is how a static route quietly becomes dynamic.
 
-import { ApiError, type CacheOpts } from "./client";
+import { ApiError, safeTags, type CacheOpts } from "./client";
 
 const API_BASE = process.env.API_BASE_URL ?? "https://economy.ams.com.kh/wp-json";
 
@@ -86,7 +86,7 @@ export async function fastPublicFetch<T>(
 
   const path = `${buildQuery({ r: resource, ...query })}`;
   const res = await fetch(`${FAST_URL}${path}`, {
-    next: { revalidate, tags },
+    next: { revalidate, tags: safeTags(tags) },
     headers: {
       accept: "application/json",
       ...(PUBLIC_KEY ? { "X-AMS-Public-Key": PUBLIC_KEY } : {}),

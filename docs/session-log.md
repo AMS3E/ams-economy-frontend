@@ -5,6 +5,27 @@ general one: Session 14 is the public menu, Session 15 the public fast read
 path, Session 20 the public site's article sliders. Entries are chronological,
 not split by area, because most of them touch both.
 
+## SESSION 24 (2026-08-14): ISR invalidation flow completed
+
+Audited the whole public cache path from `generateStaticParams` through cached
+fetches, `/api/revalidate`, and the WordPress hooks. The one-hour classic ISR
+model and `revalidateTag(tag, "max")` SWR behavior stay unchanged.
+
+- `apiFetch` and `fastPublicFetch` now normalize every tag through `safeTag`,
+  so long encoded slugs cannot be cached under a tag the webhook hashes
+  differently.
+- AMS Frontend API **1.9.1** adds blanket correctness tags for old article
+  slugs, category counts/routes and author membership; includes WordPress
+  pages; and hooks category, profile/user, comment and attachment lifecycle
+  changes. The zip is rebuilt at `docs/wordpress/ams-frontend-api.zip`.
+- Dashboard article save/unpublish/trash, category edits, profile writes and
+  media deletion now mirror the public invalidations locally instead of
+  depending entirely on the production webhook.
+- Verification: plugin PHP syntax, 227 offline fast-API assertions, TypeScript,
+  focused ESLint and a production build all pass; the build prerendered 226
+  pages. **The 1.9.1 plugin zip still needs uploading/replacing in WordPress and
+  deactivate/reactivate before the new external hooks are live.**
+
 ## SESSION 23 (2026-08-10): off Vercel onto Dokploy, and the write slowness SOLVED
 
 The big one: **admin writes went from 3–5 minutes to ~4 seconds**, and the cause

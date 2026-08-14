@@ -65,15 +65,14 @@ function toWrite(p: EditorPayload): PostWrite {
   };
 }
 
-/** Publishing/updating from the dashboard refreshes exactly the public pages
- *  the post appears on — its own page, its categories' lists, the homepage and
- *  the day tabs — instead of the blanket "articles" tag (every list page at
- *  once), to stay friendly to the Vercel ISR-writes budget. Mirrors the tag
- *  set the WP plugin's publish webhook (≥1.7.3) sends for a post. */
-function refreshPublic(status: string | undefined, slug: string | undefined, categorySlugs: string[]) {
-  if (status !== "publish") return;
-  revalidateTag("home", "max");
-  revalidateTag("daily-events", "max");
+/** Refresh the complete public article surface. A save is allowed to unpublish
+ *  or rename an existing live post, but the response only carries the NEW
+ *  status/slug. Blanket list/detail tags therefore provide the correctness
+ *  boundary; scoped tags keep the mapping explicit and useful for diagnostics. */
+function refreshPublic(slug: string | undefined, categorySlugs: string[]) {
+  for (const tag of ["articles", "article", "categories", "authors"]) {
+    revalidateTag(tag, "max");
+  }
   if (slug) revalidateTag(safeTag(`article:${slug}`), "max");
   for (const c of categorySlugs) revalidateTag(safeTag(`category:${c}`), "max");
 }
@@ -81,7 +80,9 @@ function refreshPublic(status: string | undefined, slug: string | undefined, cat
 export async function savePostAction(id: number, payload: EditorPayload): Promise<SaveResult> {
   try {
     const saved = await updatePost(id, toWrite(payload));
-    refreshPublic(saved.status, saved.slug, payload.categorySlugs);
+    // Always refresh after an update: a now-draft response may represent an
+    // unpublish, and the old slug/categories are not present in the response.
+    refreshPublic(saved.slug, payload.categorySlugs);
     return { ok: true, status: saved.status, slug: saved.slug };
   } catch (e) {
     if (e instanceof AdminAuthError) redirect("/login");
@@ -92,7 +93,7 @@ export async function savePostAction(id: number, payload: EditorPayload): Promis
 export async function createPostAction(payload: EditorPayload): Promise<SaveResult> {
   try {
     const saved = await createPost(toWrite(payload));
-    refreshPublic(saved.status, saved.slug, payload.categorySlugs);
+    if (saved.status === "publish") refreshPublic(saved.slug, payload.categorySlugs);
     return { ok: true, id: saved.id, status: saved.status, slug: saved.slug };
   } catch (e) {
     if (e instanceof AdminAuthError) redirect("/login");

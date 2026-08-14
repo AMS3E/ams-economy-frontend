@@ -37,6 +37,18 @@ function wpMessage(e: unknown): string {
   }
 }
 
+function revalidatePublicTags(tags: string[]): void {
+  for (const tag of tags) revalidateTag(tag, "max");
+}
+
+function revalidatePublicTaxonomy(): void {
+  revalidatePublicTags(["categories", "articles", "article"]);
+}
+
+function revalidatePublicArticles(): void {
+  revalidatePublicTags(["articles", "article", "categories", "authors"]);
+}
+
 /* --- categories --- */
 
 export async function createCategory(name: string, parent = 0): Promise<ActionResult> {
@@ -44,6 +56,7 @@ export async function createCategory(name: string, parent = 0): Promise<ActionRe
   if (!n) return { ok: false, error: "Enter a category name." };
   try {
     const { data } = await adminFetch<{ id: number }>("/wp/v2/categories", { method: "POST", body: { name: n, parent } });
+    revalidatePublicTaxonomy();
     return { ok: true, id: data.id };
   } catch (e) {
     return fail(e, "Couldn't create the category (the name may already exist).");
@@ -55,6 +68,7 @@ export async function renameCategory(id: number, name: string): Promise<ActionRe
   if (!n) return { ok: false, error: "Enter a category name." };
   try {
     await adminFetch(`/wp/v2/categories/${id}`, { method: "POST", body: { name: n } });
+    revalidatePublicTaxonomy();
     return { ok: true };
   } catch (e) {
     return fail(e, "Couldn't rename the category.");
@@ -75,6 +89,7 @@ export async function setCategoryParent(id: number, parent: number): Promise<Act
   if (id === parent) return { ok: false, error: "A category can't be its own parent." };
   try {
     await adminFetch(`/wp/v2/categories/${id}`, { method: "POST", body: { parent } });
+    revalidatePublicTaxonomy();
     return { ok: true };
   } catch (e) {
     return fail(e, wpMessage(e) || "Couldn't move the category.");
@@ -84,6 +99,7 @@ export async function setCategoryParent(id: number, parent: number): Promise<Act
 export async function deleteCategory(id: number): Promise<ActionResult> {
   try {
     await adminFetch(`/wp/v2/categories/${id}`, { method: "DELETE", query: { force: true } });
+    revalidatePublicTaxonomy();
     return { ok: true };
   } catch (e) {
     return fail(e, "Couldn't delete the category.");
@@ -126,6 +142,7 @@ export async function saveSettings(patch: SettingsWrite): Promise<ActionResult> 
 export async function saveProfile(patch: ProfileWrite): Promise<ActionResult> {
   try {
     await updateProfile(patch);
+    revalidatePublicTags(["authors", "article"]);
     return { ok: true };
   } catch (e) {
     return fail(e, "Couldn't save your profile.");
@@ -192,6 +209,7 @@ export async function saveMediaAlt(id: number, alt: string): Promise<ActionResul
 export async function deleteMedia(id: number): Promise<ActionResult> {
   try {
     await deleteMediaItem(id);
+    revalidatePublicTags(["media", "program", "articles", "article"]);
     return { ok: true };
   } catch (e) {
     return fail(e, "Couldn't delete the file. It may be protected or your role can't delete others' uploads.");
@@ -203,7 +221,7 @@ export async function deleteMedia(id: number): Promise<ActionResult> {
 export async function trashPost(id: number): Promise<ActionResult> {
   try {
     await adminFetch(`/wp/v2/posts/${id}`, { method: "DELETE" }); // to trash (not force)
-    revalidateTag("articles", "max"); // public lists (a published post may have vanished)
+    revalidatePublicArticles();
     return { ok: true };
   } catch (e) {
     return fail(e, "Couldn't move the post to trash.");

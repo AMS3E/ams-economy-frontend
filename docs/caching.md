@@ -47,9 +47,9 @@ writable by the unprivileged user ISR writes as.
 
 ```
 WP publish/unpublish/trash
-  └─ transition_post_status hook (ams-frontend-api.php:819-827)
-       fires only when publish is crossed either direction,
-       only for post_type in {post, episode, movie, tv_show}
+  └─ transition_post_status hook (ams-frontend-api.php)
+       fires when either state is publish,
+       for post_type in {post, episode, movie, tv_show, page}
      └─ ams_afa_revalidate_tags($post) picks the tag list (§4)
      └─ ams_afa_ping_revalidate() — wp_remote_post, blocking:false, timeout 2s
           (never blocks the WP save)
@@ -74,13 +74,29 @@ indistinguishable from outside.
 
 ## 4. Tag vocabulary — what WordPress sends vs. what the frontend consumes
 
-From `ams_afa_revalidate_tags()` in `ams-frontend-api.php:773-797`:
+From `ams_afa_revalidate_tags()` in `ams-frontend-api.php`:
 
 | Post type | Tags WordPress sends |
 |---|---|
-| `post` | `articles`, `home`, `daily-events`, `article:<slug>`, `category:<slug>` (one per term) |
-| `episode` | `episodes`, `tv-show:<show id>` |
-| `movie` / `tv_show` | `program` (blanket — WP can't know the frontend's own registry slugs) |
+| `post` | `articles`, `article`, `home`, `daily-events`, `categories`, `authors`, `author:<id>`, `article:<slug>`, `category:<slug>` (one per term) |
+| `episode` | `episodes`, `authors`, `tv-show:<show id>` |
+| `movie` / `tv_show` | `program`, `authors` (blanket — WP can't know the frontend's own registry slugs) |
+| `page` | `pages` |
+
+The plugin also invalidates outside post-status changes:
+
+| WordPress event | Tags |
+|---|---|
+| Category create/edit/delete | `categories`, `articles`, `article` |
+| User register/profile/delete | `authors`, `article` |
+| Comment create/edit/delete/status transition | `comments`, `comments:<postId>` |
+| Attachment add/edit/delete | `media`, `program`, `articles`, `article` |
+
+The blanket tags are a correctness boundary, not accidental duplication.
+`transition_post_status` can run before a REST request has applied terms/meta,
+and it only exposes the new slug. `articles` covers old/new list membership;
+`article` retires old-slug detail entries; `categories` and `authors` refresh
+the route registries and counts.
 
 Every frontend fetch's tags, by lib file (not exhaustive — grep `tags:` in
 `src/lib/**` for the full set): `articles`, `home`, `popular-articles`,
@@ -98,12 +114,6 @@ Every frontend fetch's tags, by lib file (not exhaustive — grep `tags:` in
   widget's own fetch is actually tagged with (`home-data.ts` →
   `["articles","home"]`). Two systems agree the tag exists; neither is wired
   to the other.
-- **`movie`/`tv_show` → `program` doesn't reach everything a program page
-  fetches.** `getFeaturedMovie`'s background-art fetch (`programs.ts:382-388`)
-  is tagged `["media", "media:<mediaId>"]`, not `"program"` — changing a
-  program's hero backdrop only refreshes on the natural 1h window, never
-  on-demand. Not fixable from the WP side without a separate attachment-save
-  hook that doesn't exist; low-value to add (background art rarely changes).
 - The `/api/revalidate` route's own doc comment lists the tag vocabulary it
   expects — keep it in sync when a call site's tags change.
 

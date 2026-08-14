@@ -86,6 +86,13 @@ export function safeTag(tag: string): string {
   return `${prefix}h-${h.toString(36)}-${tag.length}`;
 }
 
+/** Normalize every fetch tag at the cache boundary. Keeping this here means a
+ * caller cannot accidentally create an over-long tag that /api/revalidate
+ * later hashes to a different value. */
+export function safeTags(tags?: string[]): string[] | undefined {
+  return tags?.map(safeTag);
+}
+
 /**
  * Typed fetch against the API. Returns the parsed JSON body.
  *
@@ -95,7 +102,7 @@ export function safeTag(tag: string): string {
  */
 export async function apiFetch<T>(path: string, { revalidate, tags }: CacheOpts): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    next: { revalidate, tags },
+    next: { revalidate, tags: safeTags(tags) },
     headers: { accept: "application/json" },
   });
   if (!res.ok) throw new ApiError(res.status, path);

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AMS Frontend API
  * Description: General-purpose endpoints for the AMS Infotainment Next.js frontend (add new ones here as needed). Read-only + a standalone hero-slider embed + the homepage featured-program picker + anonymous REST commenting + per-user login tokens for authenticated writes + program custom-meta exposed to REST + skips AMS Cache's synchronous page warmer on dashboard writes (96s -> under 1s). Self-contained — deactivate/delete anytime with zero effect on anything else.
- * Version:     1.9.0
+ * Version:     1.9.1
  * Author:      Soth Kimleng
  *
  * Standalone "add endpoints as needed" API file, separate from the legacy
@@ -749,15 +749,16 @@ function ams_afa_get_featured_program() {
  * frontend renders, and sends the frontend's cache tags for exactly the pages
  * the change touches:
  *
- *   post              → articles, home, daily-events, article:<slug>,
- *                       category:<slug> (each of its categories)
- *   episode           → episodes, tv-show:<its show id>
- *   movie / tv_show   → program
+ *   post              → every article list/detail, category registry and
+ *                       author registry, plus scoped article/category tags
+ *   episode           → episodes, authors, tv-show:<its show id>
+ *   movie / tv_show   → program, authors
+ *   page              → pages
  *
  * Configure it in Settings → Frontend Cache (webhook URL + shared secret; the
  * secret must equal the frontend's REVALIDATE_SECRET env). Unconfigured = the
  * hook no-ops, so the plugin stays safe to deploy anywhere. The request is
- * fire-and-forget (non-blocking, 2s cap) — publishing never waits on Vercel.
+ * fire-and-forget (non-blocking, 2s cap) — publishing never waits on Next.js.
  */
 define( 'AMS_AFA_REVALIDATE_OPTION', 'ams_afa_revalidate' );
 
@@ -773,7 +774,16 @@ function ams_afa_revalidate_config() {
 function ams_afa_revalidate_tags( $post ) {
     switch ( $post->post_type ) {
         case 'post':
-            $tags = array( 'articles', 'home', 'daily-events', 'article:' . $post->post_name );
+            // Blanket tags are intentional. transition_post_status runs before
+            // REST has applied terms/meta, and it only receives the NEW slug.
+            // `articles` covers every list; `article` also expires an old-slug
+            // detail after a rename; categories/authors refresh route registries
+            // and counts whose membership can change on publish/unpublish.
+            $tags = array(
+                'articles', 'article', 'home', 'daily-events', 'categories',
+                'authors', 'author:' . (int) $post->post_author,
+                'article:' . $post->post_name,
+            );
             $terms = get_the_terms( $post, 'category' );
             if ( is_array( $terms ) ) {
                 foreach ( $terms as $t ) {
@@ -785,12 +795,17 @@ function ams_afa_revalidate_tags( $post ) {
             return $tags;
         case 'episode':
             $show = (int) get_post_meta( $post->ID, '_tv_show_id', true );
-            return $show ? array( 'episodes', 'tv-show:' . $show ) : array( 'episodes' );
+            return $show
+                ? array( 'episodes', 'authors', 'tv-show:' . $show )
+                : array( 'episodes', 'authors' );
         case 'movie':
         case 'tv_show':
             // The frontend keys program pages by ITS OWN registry slugs, which
             // WordPress cannot know — the blanket tag (≈43 pages) is correct.
-            return array( 'program' );
+            return array( 'program', 'authors' );
+        case 'page':
+            // A blanket tag also retires a cached old path after a slug change.
+            return array( 'pages' );
         default:
             return array();
     }
@@ -806,7 +821,7 @@ function ams_afa_ping_revalidate( $tags ) {
     // Repeated ?tag= params (the route reads getAll("tag")); add_query_arg
     // can't repeat a key, so the query string is built by hand.
     $query = 'secret=' . rawurlencode( $cfg['secret'] );
-    foreach ( $tags as $tag ) {
+    foreach ( array_values( array_unique( $tags ) ) as $tag ) {
         $query .= '&tag=' . rawurlencode( $tag );
     }
     wp_remote_post( $cfg['url'] . '?' . $query, array(
@@ -820,11 +835,58 @@ add_action( 'transition_post_status', function ( $new_status, $old_status, $post
     if ( 'publish' !== $new_status && 'publish' !== $old_status ) {
         return; // draft shuffling — nothing public changed
     }
-    if ( ! in_array( $post->post_type, array( 'post', 'episode', 'movie', 'tv_show' ), true ) ) {
+    if ( ! in_array( $post->post_type, array( 'post', 'episode', 'movie', 'tv_show', 'page' ), true ) ) {
         return;
     }
     ams_afa_ping_revalidate( ams_afa_revalidate_tags( $post ) );
 }, 10, 3 );
+
+/** Category structure, labels, paths and counts feed routing as well as cards.
+ *  The article-detail blanket is needed because that endpoint embeds category
+ *  names in its own cached response. */
+function ams_afa_revalidate_category_change( $term_id, $tt_id, $taxonomy ) {
+    if ( 'category' === $taxonomy ) {
+        ams_afa_ping_revalidate( array( 'categories', 'articles', 'article' ) );
+    }
+}
+add_action( 'created_term', 'ams_afa_revalidate_category_change', 10, 3 );
+add_action( 'edited_term', 'ams_afa_revalidate_category_change', 10, 3 );
+add_action( 'delete_term', 'ams_afa_revalidate_category_change', 10, 3 );
+
+/** Author archives use a cached public-user registry; article detail responses
+ *  also embed the author's display name and description. */
+function ams_afa_revalidate_author_change() {
+    ams_afa_ping_revalidate( array( 'authors', 'article' ) );
+}
+add_action( 'user_register', 'ams_afa_revalidate_author_change', 10, 0 );
+add_action( 'profile_update', 'ams_afa_revalidate_author_change', 10, 0 );
+add_action( 'deleted_user', 'ams_afa_revalidate_author_change', 10, 0 );
+
+/** Public pages render approved comment counts. */
+function ams_afa_revalidate_comment_change( $comment ) {
+    $comment = is_object( $comment ) ? $comment : get_comment( $comment );
+    $tags    = array( 'comments' );
+    if ( $comment && ! empty( $comment->comment_post_ID ) ) {
+        $tags[] = 'comments:' . (int) $comment->comment_post_ID;
+    }
+    ams_afa_ping_revalidate( $tags );
+}
+add_action( 'comment_post', 'ams_afa_revalidate_comment_change', 10, 1 );
+add_action( 'edit_comment', 'ams_afa_revalidate_comment_change', 10, 1 );
+add_action( 'delete_comment', function ( $comment_id, $comment ) {
+    ams_afa_revalidate_comment_change( $comment ?: $comment_id );
+}, 10, 2 );
+add_action( 'transition_comment_status', function ( $new_status, $old_status, $comment ) {
+    ams_afa_revalidate_comment_change( $comment );
+}, 10, 3 );
+
+/** Attachments supply program artwork and article featured images. */
+function ams_afa_revalidate_attachment_change() {
+    ams_afa_ping_revalidate( array( 'media', 'program', 'articles', 'article' ) );
+}
+add_action( 'add_attachment', 'ams_afa_revalidate_attachment_change', 10, 0 );
+add_action( 'edit_attachment', 'ams_afa_revalidate_attachment_change', 10, 0 );
+add_action( 'delete_attachment', 'ams_afa_revalidate_attachment_change', 10, 0 );
 
 /* --- AMS Cache: skip its synchronous page WARMER on our writes (1.9.0) --- */
 
