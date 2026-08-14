@@ -21,7 +21,8 @@ import { cache } from "react";
 import { notFound } from "next/navigation";
 import { apiFetch } from "./api/client";
 import { fastPublicFetch, withPublicRestFallback } from "./api/fast-public";
-import { decodeEntities, mapProgram } from "./api/mappers";
+import { decodeEntities, htmlToParagraphs, mapProgram } from "./api/mappers";
+import { getNavPills } from "./navigation";
 import { CURATED_PROGRAMS, type ProgramPostType } from "./program-curation";
 import { fetchEpisodeCards, fetchSeasonCards, type SeasonCards } from "./episodes";
 import type { HomeCard } from "./home-data";
@@ -341,4 +342,84 @@ export async function getProgram(slug: string): Promise<Program> {
     ref.showId ? fetchSeasonCards(ref.slug, ref.showId) : [],
   ]);
   return { ...meta, episodes, seasons };
+}
+
+/* ── "section-featured-movie" hero, pinned by post id (see FeaturedMovieHero) ── */
+
+export interface FeaturedMovie {
+  title: string;
+  description: string[];
+  poster: string;
+  backdrop: string;
+  year: string;
+  /** The program's own page. */
+  href: string;
+  color: string;
+  /** The show's newest episode — where WATCH NOW / ▶ actually go when set,
+   *  same "no trailer, so play the newest episode instead" fallback getFeature
+   *  uses in landing-data.ts. Unset when the post has no linked show. */
+  watchHref?: string;
+}
+
+/** A movie/tv_show post's title + excerpt, straight off core REST rather than
+ *  `/wp/v2/web/program` — confirmed 404ing for every id on this backend
+ *  (2026-08-12; likely the plugin route isn't deployed here yet). Core REST's
+ *  anonymous read of published movie/tv_show posts is what the registry itself
+ *  already relies on (see the file header), so this costs nothing new. */
+async function fetchPostSummary(postType: ProgramPostType, postId: number, tag: string) {
+  const env = await apiFetch<{ title?: { rendered?: string }; excerpt?: { rendered?: string } }>(
+    `/wp/v2/${postType}/${postId}?_fields=title,excerpt`,
+    { revalidate: 3600, tags: ["program", tag] },
+  );
+  return {
+    title: decodeEntities(env.title?.rendered ?? "").trim(),
+    description: htmlToParagraphs(env.excerpt?.rendered ?? ""),
+  };
+}
+
+/** A WordPress media attachment's own (full-size) URL — also core REST, also
+ *  confirmed reachable where `/wp/v2/web/program` is not. */
+async function fetchMediaUrl(mediaId: number): Promise<string> {
+  const env = await apiFetch<{ source_url?: string }>(`/wp/v2/media/${mediaId}?_fields=source_url`, {
+    revalidate: 3600,
+    tags: ["media", `media:${mediaId}`],
+  });
+  return env.source_url ?? "";
+}
+
+/**
+ * A "section-featured-movie" hero for an arbitrary pinned movie/tv_show post —
+ * WordPress's own Vodi block's payload shape (`{"movie_id": 24747, "bg_image":
+ * 79951}`, movie and art chosen independently — same pairing FEATURES in
+ * landing-data.ts pins for the same reason: no endpoint returns it together).
+ *
+ * `postId` must already be in the program registry (it needs a route to link
+ * to); `bgImageId`, when given, wins over the program's own poster. Decoration,
+ * like getFeaturedProgram: null on any failure, including an unresolvable id.
+ */
+export async function getFeaturedMovie(postId: number, bgImageId?: number): Promise<FeaturedMovie | null> {
+  try {
+    const ref = await programByPostId(postId);
+    if (!ref) return null;
+
+    const [summary, bg, pills, episodes] = await Promise.all([
+      fetchPostSummary(ref.postType, postId, `program:${ref.slug}`),
+      bgImageId ? fetchMediaUrl(bgImageId) : Promise.resolve(""),
+      getNavPills(),
+      ref.showId ? fetchEpisodeCards(ref.slug, ref.showId, 1) : Promise.resolve([]),
+    ]);
+
+    return {
+      title: summary.title || ref.title,
+      description: summary.description,
+      poster: ref.poster,
+      backdrop: bg || ref.poster,
+      year: ref.year,
+      href: programHref(ref.slug),
+      color: pills.find((p) => p.slug === ref.slug)?.background ?? "#1a5fd0",
+      watchHref: episodes[0]?.href,
+    };
+  } catch {
+    return null;
+  }
 }

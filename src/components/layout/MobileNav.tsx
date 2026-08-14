@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import Link from "next/link";
 import { css } from "@/styled-system/css";
 import { ChevronDownIcon, CloseIcon, MenuIcon, SearchIcon, SmartphoneIcon } from "@/components/icons";
 import type { NavSection } from "@/lib/categories";
 import { PROGRAM_ICON_LABEL, type NavPill, type ProgramIcon } from "@/lib/navigation";
-import { programHref } from "@/lib/programs";
 
 // The whole desktop header (SiteHeader) is a Server Component that opens its
 // menus on hover with no JS. That approach can't drive a mobile drawer — a drawer
@@ -28,15 +28,17 @@ type Props = { menu: NavSection[]; pills: NavPill[]; progIcons: ProgramIcon[] };
 const HAIRLINE = "rgba(255,255,255,.08)";
 
 // Shown only below `lg`; on desktop the hover nav in SiteHeader takes over.
+// Sits directly on the top bar's now-white background (see SiteHeader), unlike
+// the drawer PANEL below, which stays its own dark surface independent of that.
 const hamburger = css({
   display: { base: "inline-flex", lg: "none" },
   alignItems: "center",
   justifyContent: "center",
   flex: "0 0 auto",
-  color: "#e4e5ea",
+  color: "#595959",
   cursor: "pointer",
   transition: "color .2s",
-  _hover: { color: "#fff" },
+  _hover: { color: "#000" },
 });
 
 // The overlay is gated off entirely on desktop, so a mobile→desktop resize while
@@ -158,12 +160,10 @@ const chevron = css({ transition: "transform .2s", flex: "0 0 auto" });
 
 const rowHeadBase = { display: "flex", alignItems: "center" } as const;
 const sectionHead = css({ ...rowHeadBase, px: "20px" });
-const topicHead = css({ ...rowHeadBase, pl: "32px", pr: "20px" });
 
 // Nested levels sit on progressively lighter surfaces and step further in, so the
 // depth reads at a glance.
 const subList = css({ background: "#0e0f15" });
-const leafWrap = css({ background: "#121319" });
 const leafLink = css({
   display: "block",
   pl: "44px",
@@ -191,15 +191,19 @@ const digitalBtn = css({
 });
 
 const pillList = css({ display: "flex", flexDirection: "column", py: "8px" });
+// Same CSS-variable pattern as SiteHeader's pillLink — see its comment. Live
+// hover is `background-color:#000;color:#fff` regardless of the pill's own
+// color, which a plain inline `style` can't be overridden into via a class.
 const pill = css({
   display: "block",
   px: "20px",
   py: "13px",
-  color: "#fff",
   fontSize: "15px",
   fontWeight: 600,
-  transition: "filter .2s",
-  _hover: { filter: "brightness(1.1)" },
+  background: "var(--pill-bg)",
+  color: "var(--pill-color)",
+  transition: "background-color .2s, color .2s",
+  _hover: { background: "#000000", color: "#ffffff" },
 });
 
 const footer = css({ mt: "auto", px: "20px", py: "20px", color: "#7c7d86", fontSize: "13px", fontStyle: "italic" });
@@ -294,34 +298,15 @@ export default function MobileNav({ menu, pills, progIcons }: Props) {
                   </button>
                 </div>
 
+                {/* Flat — see the same note in SiteHeader: Economy's sections
+                    have no topic tier, so this opens straight onto the two
+                    leaves rather than a further topic accordion. */}
                 {isOpen(section.href) && (
                   <div className={subList}>
-                    {section.topics.map((topic) => (
-                      <div key={topic.href}>
-                        <div className={topicHead}>
-                          <Link href={topic.href} onClick={closeDrawer} className={rowLink}>
-                            {topic.label}
-                          </Link>
-                          <button
-                            type="button"
-                            aria-expanded={isOpen(topic.href)}
-                            aria-label={`${isOpen(topic.href) ? "បិទ" : "បើក"} ${topic.label}`}
-                            onClick={() => toggle(topic.href)}
-                            className={rowToggle}>
-                            <ChevronDownIcon size={20} className={chevron} style={spin(isOpen(topic.href))} />
-                          </button>
-                        </div>
-
-                        {isOpen(topic.href) && (
-                          <div className={leafWrap}>
-                            {topic.leaves.map((leaf) => (
-                              <Link key={leaf.href} href={leaf.href} onClick={closeDrawer} className={leafLink}>
-                                {leaf.label}
-                              </Link>
-                            ))}
-                          </div>
-                        )}
-                      </div>
+                    {section.leaves.map((leaf) => (
+                      <Link key={leaf.href} href={leaf.href} onClick={closeDrawer} className={leafLink}>
+                        {leaf.label}
+                      </Link>
                     ))}
                   </div>
                 )}
@@ -340,7 +325,7 @@ export default function MobileNav({ menu, pills, progIcons }: Props) {
               {isOpen("digital") && (
                 <div className={subList}>
                   {progIcons.map((p) => (
-                    <Link key={p.slug} href={programHref(p.slug)} onClick={closeDrawer} className={leafLink}>
+                    <Link key={p.slug} href={p.href} onClick={closeDrawer} className={leafLink}>
                       {p.title}
                     </Link>
                   ))}
@@ -351,13 +336,19 @@ export default function MobileNav({ menu, pills, progIcons }: Props) {
 
           <div className={pillList}>
             {pills.map((p) => (
-              <Link key={p.slug} href={programHref(p.slug)} onClick={closeDrawer} className={pill} style={{ background: p.background }}>
+              <Link
+                key={p.slug}
+                href={p.href}
+                onClick={closeDrawer}
+                className={pill}
+                style={{ "--pill-bg": p.background, "--pill-color": p.color } as CSSProperties}
+              >
                 {p.label}
               </Link>
             ))}
           </div>
 
-          <div className={footer}>@infotainment</div>
+          <div className={footer}>@amseconomy</div>
         </aside>
       </div>
     </>

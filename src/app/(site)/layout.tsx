@@ -1,6 +1,7 @@
 import { css } from "@/styled-system/css";
 import SiteHeader from "@/components/layout/SiteHeader";
 import SiteFooter from "@/components/layout/SiteFooter";
+import ReviveRouteCleanup from "@/components/ads/revive/ReviveRouteCleanup";
 
 // The public site's chrome. This used to live in the root layout; it moved here
 // when the admin tool was added so that /admin can render its own full-screen
@@ -22,6 +23,7 @@ export default function SiteLayout({
         transition: "background .25s, color .25s",
       })}
     >
+      <ReviveRouteCleanup />
       <SiteHeader />
       <main className={css({ flex: "1" })}>{children}</main>
       <SiteFooter />

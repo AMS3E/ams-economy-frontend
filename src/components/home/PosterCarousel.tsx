@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import Link from "next/link";
 import { css, cx } from "@/styled-system/css";
 import CoverImage from "@/components/ui/CoverImage";
@@ -18,46 +18,22 @@ export interface PosterItem {
   active?: boolean;
 }
 
-/** The left rail of the "aside" layout. Supplying it moves the arrows out of the
- *  track and into the rail, beneath the heading. */
+/** The left rail of the "aside" layout — heading + blurb + "see all" beside
+ *  the track. */
 export interface CarouselAside {
   title: string;
   subtitle?: string;
   seeAllHref?: string;
 }
 
-const arrowBase = {
-  width: "36px",
-  height: "36px",
-  borderRadius: "50%",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  cursor: "pointer",
-  transition: "transform .2s",
-  _hover: { transform: "scale(1.1)" },
-} as const;
-
-/** Overlay arrows: floated over the track's edges, on a dark band. */
-const arrow = css({
-  ...arrowBase,
-  position: "absolute",
-  top: "42%",
-  background: "control.bg",
-  color: "control.fg",
-  boxShadow: "0 2px 10px rgba(0,0,0,.4)",
-});
-
-/** Rail arrows: sitting in the aside column, so they need no fill of their own. */
-const railArrow = css({
-  ...arrowBase,
-  border: "1px solid",
-  borderColor: "divider",
-  color: "muted",
-  fontSize: "18px",
-});
-
 const card = css({ display: "block", flex: "0 0 224px", color: "inherit", textDecoration: "none" });
+// One card's scroll step: its own 224px plus the track's 16px gap — so
+// "advance one card" (wheel-free auto-scroll) and the wheel handler both
+// move by exactly one card width, never landing mid-card.
+const CARD_STEP = 224 + 16;
+// Auto-advance cadence. Long enough to read a title, short enough that the
+// whole rail cycles in well under a minute.
+const AUTO_SCROLL_MS = 3500;
 
 const poster = css({
   position: "relative",
@@ -75,19 +51,128 @@ const meta = css({ marginTop: "10px" });
 const yearText = css({ color: "muted", fontSize: "11px" });
 const titleText = css({ color: "text", fontSize: "12.5px", fontWeight: 600, marginTop: "3px" });
 
-export default function PosterCarousel({ posters, aside }: { posters: PosterItem[]; aside?: CarouselAside }) {
+export default function PosterCarousel({
+  posters,
+  aside,
+  unoptimized,
+  autoScrollMs = AUTO_SCROLL_MS,
+}: {
+  posters: PosterItem[];
+  aside?: CarouselAside;
+  /** See CoverImage's `unoptimized` — applied to every poster in the track. */
+  unoptimized?: boolean;
+  /** Delay between one-card auto-advances. */
+  autoScrollMs?: number;
+}) {
   const trackRef = useRef<HTMLDivElement>(null);
 
-  const scroll = (delta: number) => trackRef.current?.scrollBy({ left: delta, behavior: "smooth" });
+  // Vertical mouse-wheel scrolls the track horizontally — the browser doesn't
+  // do this on its own for an overflow-x container. A trackpad's own
+  // horizontal swipe (deltaX) is left alone so it isn't fought or doubled.
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
+      e.preventDefault();
+      el.scrollBy({ left: e.deltaY, behavior: "auto" });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // Desktop mouse drag. Native overflow already handles touch/trackpad, but a
+  // mouse cannot grab a horizontal rail by default. Suppress the link click
+  // only when the pointer actually moved, so ordinary card clicks still work.
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    let dragging = false;
+    let moved = false;
+    let startX = 0;
+    let startScroll = 0;
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType !== "mouse" || e.button !== 0) return;
+      dragging = true;
+      moved = false;
+      startX = e.clientX;
+      startScroll = el.scrollLeft;
+      el.setPointerCapture(e.pointerId);
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      if (!dragging) return;
+      const delta = e.clientX - startX;
+      if (Math.abs(delta) > 4) moved = true;
+      el.scrollLeft = startScroll - delta;
+    };
+    const finishDrag = (e: PointerEvent) => {
+      if (!dragging) return;
+      dragging = false;
+      if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    };
+    const suppressDraggedClick = (e: MouseEvent) => {
+      if (!moved) return;
+      e.preventDefault();
+      e.stopPropagation();
+      moved = false;
+    };
+    const preventImageDrag = (e: DragEvent) => e.preventDefault();
+
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", finishDrag);
+    el.addEventListener("pointercancel", finishDrag);
+    el.addEventListener("click", suppressDraggedClick, true);
+    el.addEventListener("dragstart", preventImageDrag);
+    return () => {
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", finishDrag);
+      el.removeEventListener("pointercancel", finishDrag);
+      el.removeEventListener("click", suppressDraggedClick, true);
+      el.removeEventListener("dragstart", preventImageDrag);
+    };
+  }, []);
+
+  // Auto-advance one card at a time, looping back to the start at the end.
+  // Paused on hover/focus so it never fights a viewer mid-read or mid-scroll.
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    let paused = false;
+    const pause = () => { paused = true; };
+    const resume = () => { paused = false; };
+    el.addEventListener("mouseenter", pause);
+    el.addEventListener("mouseleave", resume);
+    el.addEventListener("focusin", pause);
+    el.addEventListener("focusout", resume);
+    const id = setInterval(() => {
+      if (paused) return;
+      const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 4;
+      el.scrollTo({ left: atEnd ? 0 : el.scrollLeft + CARD_STEP, behavior: "smooth" });
+    }, autoScrollMs);
+    return () => {
+      clearInterval(id);
+      el.removeEventListener("mouseenter", pause);
+      el.removeEventListener("mouseleave", resume);
+      el.removeEventListener("focusin", pause);
+      el.removeEventListener("focusout", resume);
+    };
+  }, [autoScrollMs]);
 
   const track = (
     <div
       ref={trackRef}
+      tabIndex={0}
+      aria-label='Scroll for more'
       className={css({
         display: "flex",
         gap: "16px",
         overflowX: "auto",
         scrollBehavior: "smooth",
+        cursor: "grab",
+        userSelect: "none",
         padding: "4px 0",
         scrollbarWidth: "none",
         "&::-webkit-scrollbar": { display: "none" },
@@ -96,7 +181,7 @@ export default function PosterCarousel({ posters, aside }: { posters: PosterItem
         const body = (
           <>
             <div className={cx(poster, p.active && posterCurrent)}>
-              <CoverImage src={p.src} sizes='224px' />
+              <CoverImage src={p.src} sizes='224px' unoptimized={unoptimized} />
             </div>
             <div className={meta}>
               {p.year && <div className={yearText}>{p.year}</div>}
@@ -118,8 +203,8 @@ export default function PosterCarousel({ posters, aside }: { posters: PosterItem
     </div>
   );
 
-  // Aside layout: heading, blurb, arrows and "see all" stacked in a left rail,
-  // with the track running alongside. Used by the landing pages' សម្រាប់លោកអ្នក.
+  // Aside layout: heading, blurb and "see all" stacked in a left rail, with
+  // the track running alongside. Used by the landing pages' សម្រាប់លោកអ្នក.
   if (aside) {
     return (
       <div
@@ -134,14 +219,6 @@ export default function PosterCarousel({ posters, aside }: { posters: PosterItem
           {aside.subtitle && (
             <p className={css({ fontSize: "13px", color: "muted", marginTop: "10px" })}>{aside.subtitle}</p>
           )}
-          <div className={css({ display: "flex", gap: "12px", marginTop: "22px" })}>
-            <span onClick={() => scroll(-440)} role='button' aria-label='Previous' className={railArrow}>
-              ‹
-            </span>
-            <span onClick={() => scroll(440)} role='button' aria-label='Next' className={railArrow}>
-              ›
-            </span>
-          </div>
           {aside.seeAllHref && (
             <Link
               href={aside.seeAllHref}
@@ -163,16 +240,5 @@ export default function PosterCarousel({ posters, aside }: { posters: PosterItem
     );
   }
 
-  return (
-    <div className={css({ position: "relative" })}>
-      {track}
-
-      <span onClick={() => scroll(-440)} role='button' aria-label='Previous' className={cx(arrow, css({ left: "-12px" }))}>
-        ‹
-      </span>
-      <span onClick={() => scroll(440)} role='button' aria-label='Next' className={cx(arrow, css({ right: "-12px" }))}>
-        ›
-      </span>
-    </div>
-  );
+  return <div className={css({ position: "relative" })}>{track}</div>;
 }

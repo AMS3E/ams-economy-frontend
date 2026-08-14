@@ -5,32 +5,89 @@ import Link from "next/link";
 import { css } from "@/styled-system/css";
 import type { Video } from "@/lib/api/video";
 
-const playButton = css({
+// Centers the button (+ optional label, stacked beneath it) as one group —
+// the button itself no longer self-positions, so a label can sit under it
+// without throwing off the centering math. Hover scales the whole group.
+const wrap = css({
   position: "absolute",
   left: "50%",
   top: "50%",
   transform: "translate(-50%,-50%)",
-  width: "84px",
-  height: "84px",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: "12px",
+  cursor: "pointer",
+  textDecoration: "none",
+  transition: "transform .2s",
+  _hover: { transform: "translate(-50%,-50%) scale(1.06)" },
+  // Resets <button>'s native chrome — a no-op on the <Link> branch, which has
+  // none of these by default.
+  border: "none",
+  background: "none",
+  padding: 0,
+  font: "inherit",
+});
+
+const playButtonBase = {
   borderRadius: "50%",
-  background: "rgba(255,255,255,.92)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  cursor: "pointer",
-  boxShadow: "0 4px 24px rgba(0,0,0,.4)",
-  transition: "transform .2s",
-  textDecoration: "none",
-  border: "none",
-  _hover: { transform: "translate(-50%,-50%) scale(1.08)" },
-});
+  transition: "opacity .2s",
+} as const;
 
-const playGlyph = css({ color: "#15161d", fontSize: "30px", marginLeft: "5px" });
+// Solid: a filled white disc over photographic art (VideoFeatureStrip).
+const playButtonSolid = css({
+  ...playButtonBase,
+  width: "84px",
+  height: "84px",
+  background: "rgba(255,255,255,.92)",
+  boxShadow: "0 4px 24px rgba(0,0,0,.4)",
+  border: "none",
+});
+const playGlyphSolid = css({ color: "#15161d", fontSize: "30px", marginLeft: "5px" });
+
+// Ghost: a large outlined, mostly-transparent ring — matches the live
+// section-featured-movie block's own ▶ (economy.ams.com.kh, checked 2026-08-12).
+const playButtonGhost = css({
+  ...playButtonBase,
+  width: "120px",
+  height: "120px",
+  background: "transparent",
+  border: "2px solid #fff",
+  opacity: 0.8,
+  _hover: { opacity: 1 },
+});
+const playGlyphGhost = css({ color: "#fff", fontSize: "40px", marginLeft: "6px" });
+
+const watchLabel = css({
+  color: "#fff",
+  fontSize: "13px",
+  fontWeight: 700,
+  letterSpacing: "1px",
+  textTransform: "uppercase",
+  textShadow: "0 2px 8px rgba(0,0,0,.5)",
+});
 
 /** The ▶ button on the feature strip. With a trailer it opens a lightbox (the
  *  live site's fancybox behaviour); with none it NAVIGATES to `watchHref` — the
  *  show's newest episode — which is what live's own player template does. Only
  *  when it has neither does it render nothing.
+ *
+ *  `variant` — "solid" (default) is VideoFeatureStrip's filled white disc over
+ *  photographic art; "ghost" is the large outlined ring FeaturedMovieHero uses,
+ *  matching the live section-featured-movie block's own ▶.
+ *
+ *  `label` — optional caption stacked under the button ("WATCH").
+ *
+ *  `color` — ghost variant only: overrides the ring/glyph colour (default
+ *  white). No effect on "solid", whose white disc is meant to read against any
+ *  art — recoloring it would fight the art rather than the background.
+ *
+ *  `left`/`top` — override the button's position within its containing box
+ *  (default dead-center, 50%/50%). Still centers ON that point either way —
+ *  only the point itself moves.
  *
  *  The iframe is only mounted while the lightbox is open, so the banner costs
  *  nothing on a page nobody clicks it on. */
@@ -38,12 +95,27 @@ export default function FeatureTrailer({
   video,
   title,
   watchHref,
+  variant = "solid",
+  label,
+  color,
+  left,
+  top,
 }: {
   video: Video | null;
   title: string;
   watchHref?: string;
+  variant?: "solid" | "ghost";
+  label?: string;
+  color?: string;
+  left?: string;
+  top?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const playButton = variant === "ghost" ? playButtonGhost : playButtonSolid;
+  const playGlyph = variant === "ghost" ? playGlyphGhost : playGlyphSolid;
+  const ghostStyle = variant === "ghost" && color ? { borderColor: color } : undefined;
+  const glyphStyle = variant === "ghost" && color ? { color } : undefined;
+  const wrapStyle = left || top ? { left, top } : undefined;
 
   useEffect(() => {
     if (!open) return;
@@ -61,8 +133,11 @@ export default function FeatureTrailer({
   if (!video) {
     if (!watchHref) return null;
     return (
-      <Link href={watchHref} aria-label={`Watch ${title}`} className={playButton}>
-        <span className={playGlyph}>▶</span>
+      <Link href={watchHref} aria-label={`Watch ${title}`} className={wrap} style={wrapStyle}>
+        <span className={playButton} style={ghostStyle}>
+          <span className={playGlyph} style={glyphStyle}>▶</span>
+        </span>
+        {label && <span className={watchLabel}>{label}</span>}
       </Link>
     );
   }
@@ -73,8 +148,12 @@ export default function FeatureTrailer({
         type='button'
         aria-label={`Play the ${title} trailer`}
         onClick={() => setOpen(true)}
-        className={playButton}>
-        <span className={playGlyph}>▶</span>
+        className={wrap}
+        style={wrapStyle}>
+        <span className={playButton} style={ghostStyle}>
+          <span className={playGlyph} style={glyphStyle}>▶</span>
+        </span>
+        {label && <span className={watchLabel}>{label}</span>}
       </button>
 
       {open && (

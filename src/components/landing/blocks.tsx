@@ -71,8 +71,9 @@ function MetaCard({ item, cover, sizes }: { item: ArticleRef; cover: string; siz
 }
 
 /** Vertical cards in a three-up row, each under a "categories · date" meta line
- *  — what live's ស្នេហានិងទំនាក់ទំនង / ទេសចរណ៍ / អត្ថបទកម្សាន្ត rows show. */
-export function CardRow({ block }: { block: Block }) {
+ *  — what live's ស្នេហានិងទំនាក់ទំនង / ទេសចរណ៍ / អត្ថបទកម្សាន្ត rows show. `big`
+ *  forwards to ArticleCard's taller 4:3 thumbnail. */
+export function CardRow({ block, big }: { block: Block; big?: boolean }) {
   return (
     <div>
       <SectionHeader title={block.heading} titleSize="22px" seeAllHref={block.href} />
@@ -84,7 +85,7 @@ export function CardRow({ block }: { block: Block }) {
         })}
       >
         {block.items.map((item) => (
-          <ArticleCard key={item.slug} item={item} sizes="(max-width: 768px) 50vw, 300px" withCategories />
+          <ArticleCard key={item.slug} item={item} sizes="(max-width: 768px) 50vw, 300px" withCategories big={big} />
         ))}
       </div>
     </div>
@@ -160,27 +161,41 @@ export function CardGrid({ block, sizes }: { block: Block; sizes?: string }) {
 }
 
 /** A numbered, text-only list. */
-export function Ranked({ block }: { block: RankedBlock }) {
+export function Ranked({ block, variant = "underline" }: { block: RankedBlock; variant?: "line" | "underline" }) {
   return (
     <div>
-      <SectionHeader variant="underline" title={block.heading} titleSize="22px" seeAllHref={block.href} />
+      <SectionHeader variant={variant} title={block.heading} titleSize="22px" seeAllHref={block.href} />
       <RankedList items={block.items} />
     </div>
   );
 }
 
-/** A lead featured card ABOVE a stack of horizontal rows. */
-export function LeadAndRows({ block, sizes }: { block: Block; sizes?: string }) {
+/** A lead featured card ABOVE a stack of horizontal rows. `fillHeight` lets a
+ * desktop column distribute its rows through the height of a taller sibling. */
+export function LeadAndRows({ block, sizes, fillHeight = false }: { block: Block; sizes?: string; fillHeight?: boolean }) {
   const [lead, ...rest] = block.items;
   return (
-    <div>
+    <div
+      className={css(
+        fillHeight
+          ? { display: "flex", flexDirection: "column", height: { base: "auto", lg: "100%" } }
+          : {},
+      )}
+    >
       <SectionHeader title={block.heading} titleSize="22px" seeAllHref={block.href} />
       {lead && (
         <div className={css({ marginBottom: "22px" })}>
           <FeaturedArticleCard item={lead} sizes={sizes} />
         </div>
       )}
-      <div className={css({ display: "flex", flexDirection: "column", gap: "22px" })}>
+      <div
+        className={css({
+          display: "flex",
+          flexDirection: "column",
+          gap: "22px",
+          ...(fillHeight ? { flex: { lg: "1" }, justifyContent: { lg: "space-between" } } : {}),
+        })}
+      >
         {rest.map((item) => (
           <ArticleRow key={item.slug} item={item} sizes="(max-width: 1024px) 45vw, 280px" />
         ))}
@@ -189,8 +204,9 @@ export function LeadAndRows({ block, sizes }: { block: Block; sizes?: string }) 
   );
 }
 
-/** A lead featured card BESIDE a column of thumbnail rows (បំណិនជីវិត). */
-export function LeadBesideRows({ block, sizes }: { block: Block; sizes?: string }) {
+/** A lead featured card BESIDE a column of thumbnail rows (បំណិនជីវិត). `detailed`
+ *  bumps the row thumbnails up to MiniRow's bigger geometry (180x120 vs 125x80). */
+export function LeadBesideRows({ block, sizes, detailed }: { block: Block; sizes?: string; detailed?: boolean }) {
   const [lead, ...rest] = block.items;
   return (
     <div>
@@ -206,7 +222,7 @@ export function LeadBesideRows({ block, sizes }: { block: Block; sizes?: string 
         {lead && <FeaturedArticleCard item={lead} sizes={sizes} excerpt={false} />}
         <div className={css({ display: "flex", flexDirection: "column", gap: "18px" })}>
           {rest.map((item) => (
-            <MiniRow key={item.slug} item={item} meta />
+            <MiniRow key={item.slug} item={item} variant={detailed ? "detailed" : "compact"} meta />
           ))}
         </div>
       </div>
@@ -216,17 +232,28 @@ export function LeadBesideRows({ block, sizes }: { block: Block; sizes?: string 
 
 /** A column of thumbnail rows. `detailed` gives each row a bigger cover and its
  *  categories · date line (the topic page's អត្ថបទថ្មីៗ). */
-export function Thumbs({ block, detailed }: { block: Block; detailed?: boolean }) {
+export function Thumbs({
+  block,
+  detailed,
+  meta,
+  variant = "underline",
+}: {
+  block: Block;
+  detailed?: boolean;
+  /** Show categories and date independently of thumbnail size. */
+  meta?: boolean;
+  variant?: "line" | "underline";
+}) {
   return (
     <div>
-      <SectionHeader variant="underline" title={block.heading} titleSize="22px" seeAllHref={block.href} />
+      <SectionHeader variant={variant} title={block.heading} titleSize="22px" seeAllHref={block.href} />
       <div className={detailed ? thumbsGapWide : thumbsGap}>
         {block.items.map((item) => (
           <MiniRow
             key={item.slug}
             item={item}
             variant={detailed ? "detailed" : "compact"}
-            meta={detailed}
+            meta={meta ?? detailed}
           />
         ))}
       </div>

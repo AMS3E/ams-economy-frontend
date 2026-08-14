@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "panda codegen && next dev",
+    "dev": "panda codegen && next dev --experimental-https",
     "build": "panda codegen && next build",
     "start": "next start",
     "prepare": "panda codegen",

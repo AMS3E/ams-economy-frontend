@@ -35,10 +35,43 @@ export interface CategoryTerm {
 /** The section level is the one place WordPress breaks its own convention: the
  *  news term sits at `entertainment-news/news` but its reports counterpart at
  *  `entertainment/reports`, so the pair cannot be derived. Topics below this
- *  level all pair cleanly on their path prefix — see topicKey(). */
+ *  level all pair cleanly on their path prefix — see topicKey().
+ *
+ *  This is Infotainment's legacy tree. Economy's flat landing-page pairs are
+ *  declared separately in NAV_SECTIONS and merged by landingsOf(). */
 const SECTION_PAIRS = [
   { news: "entertainment-news", reports: "entertainment-reports" },
   { news: "life-style-news", reports: "life-style-reports" },
+];
+
+/**
+ * The header nav's 6 sections, transcribed from economy.ams.com.kh's live menu
+ * (`#menu-ams-economy`, 2026-08-11) — economic/finance/real-estate/business/
+ * pr/start-up-innovation, in that order.
+ *
+ * Economy's taxonomy is only ONE level deep below its two roots (`all-news`,
+ * `all-report`) — `news-economic`'s own `link` is
+ * `.../category/all-news/news-economic/`, with NO further sub-topic beneath
+ * it. That's structurally different from Infotainment's SECTION_PAIRS above
+ * (section -> topic -> {news,reports}), so this does not reuse that shape:
+ * every entry here IS a leaf pair directly, no topic tier.
+ *
+ * `href` is a real WordPress PAGE (`menu-item-object-page` in the live
+ * markup) — NOT derived from the category path. Infotainment's landingHref()
+ * recovers a landing URL from a term's path via topicKey() (stripping a
+ * trailing `/news` or `/reports`), which only works because Infotainment's
+ * paths end in a bare "news"/"reports" segment. Economy's don't: the path is
+ * "all-news/news-economic", and "news-economic" is not "news", so the same
+ * regex can't recover "/economic" from it. There is no rule to derive these
+ * pages from the taxonomy — pin them, same reasoning as program-curation.ts.
+ */
+export const NAV_SECTIONS = [
+  { news: "news-economic", reports: "report-economic", href: "/economic" },
+  { news: "news-finance", reports: "report-finance", href: "/finance" },
+  { news: "news-realestate", reports: "report-realestate", href: "/real-estate" },
+  { news: "news-business", reports: "report-business", href: "/business" },
+  { news: "news-pr", reports: "report-pr", href: "/pr" },
+  { news: "news-startup-and-innovation", reports: "report-startup-and-innovation", href: "/start-up-innovation" },
 ];
 
 /** The flyout's two entries are custom links in WordPress's menu with no term
@@ -46,30 +79,6 @@ const SECTION_PAIRS = [
  *  including two Khmer spellings the CMS has wrong, which we deliberately do not
  *  patch here (fixing them in the frontend would fork the taxonomy). */
 const CONTENT_TYPE_LABELS = { news: "ព្រឹត្តិការណ៍ប្រចាំថ្ងៃ", reports: "បទយកការណ៍" };
-
-/**
- * The order the menu lists topics in, by topicKey.
- *
- * It has to be spelled out. The live menu is a hand-sorted wp_nav_menu, but we
- * build the nav from the TAXONOMY (/wp/v2/categories), which returns terms
- * ordered by name — so left alone the menu comes out alphabetised in Khmer, a
- * different order in each section and not the one the site publishes. The
- * taxonomy carries no term_order, so there is nothing to sort on.
- *
- * A topic missing from this list still renders; it just sorts to the end.
- */
-const TOPIC_ORDER = [
-  "celebrity",
-  "movie-and-music",
-  "strange",
-  "culture",
-  "life-style/travel",
-  "life-style/love-and-relation",
-  "life-style/health-and-beauty",
-  "life-style/life-tips",
-  "life-style/architecture",
-];
-
 
 const CATEGORY_PREFIX = "/category/";
 
@@ -81,12 +90,6 @@ function toPath(link: string, slug: string): string {
 
 /** Strip the trailing content-type segment: "celebrity/news" -> "celebrity". */
 const topicKey = (path: string) => path.replace(/\/(news|reports)$/, "");
-
-/** A topic's position in TOPIC_ORDER; unlisted topics sort to the end. */
-const topicRank = (path: string) => {
-  const i = TOPIC_ORDER.indexOf(topicKey(path));
-  return i === -1 ? TOPIC_ORDER.length : i;
-};
 
 export const categoryHref = (path: string) => `${CATEGORY_PREFIX}${path}`;
 
@@ -261,10 +264,11 @@ export interface Landing {
   level: LandingLevel;
   /** The section this landing sits under. A section is its own section. */
   section: CategoryTerm;
+  /** Public page path without surrounding slashes. */
+  path: string;
 }
 
-/** The eleven terms that have a landing page: the two sections and their nine
- *  topics, all from the NEWS tree.
+/** The terms that have a landing page, all from the NEWS tree.
  *
  *  The reports tree is deliberately excluded. topicKey() maps `celebrity/news`
  *  and `celebrity/reports` onto the same key — that is precisely what it is FOR
@@ -273,35 +277,52 @@ export interface Landing {
 function landingsOf(terms: CategoryTerm[]): Landing[] {
   const bySlug = new Map(terms.map(t => [t.slug, t]));
 
-  return SECTION_PAIRS.flatMap(pair => {
+  const legacy = SECTION_PAIRS.flatMap(pair => {
     const section = bySlug.get(pair.news);
     if (!section) return [];
     const topics = terms.filter(t => t.parent === section.id);
     return [
-      { term: section, level: "section" as const, section },
-      ...topics.map(t => ({ term: t, level: "topic" as const, section })),
+      { term: section, level: "section" as const, section, path: topicKey(section.path) },
+      ...topics.map(t => ({ term: t, level: "topic" as const, section, path: topicKey(t.path) })),
     ];
   });
+
+  // Economy's primary sections are already leaf terms beneath `all-news`.
+  // Their public page URLs are WordPress pages and cannot be derived from the
+  // category paths, so use the same explicit mapping as the header navigation.
+  const economy = NAV_SECTIONS.flatMap(entry => {
+    const section = bySlug.get(entry.news);
+    return section
+      ? [{
+          term: section,
+          level: "section" as const,
+          section,
+          path: entry.href.replace(/^\/+|\/+$/g, ""),
+        }]
+      : [];
+  });
+
+  return [...legacy, ...economy];
 }
 
 /** Resolve a bare (non-/category/) path to its landing page, or null for 404.
  *
  *  The landing route is the site's ROOT catch-all, so every URL that isn't one
  *  of the static segments (/article, /category, /program) arrives here. Anything
- *  that is not one of the eleven landing paths must be rejected.
+ *  that is not one of the configured landing paths must be rejected.
  *
  *  THROWING term list, same reason as resolveCategory: null is a 404 here, and
  *  all eleven landings would take it at once. */
 export async function resolveLanding(segments: string[]): Promise<Landing | null> {
   const path = segments.join("/");
-  return landingsOf(await fetchCategoryTerms()).find(l => topicKey(l.term.path) === path) ?? null;
+  return landingsOf(await fetchCategoryTerms()).find(l => l.path === path) ?? null;
 }
 
-/** The eleven landing paths, split into segments for generateStaticParams —
+/** Landing paths, split into segments for generateStaticParams —
  *  hence the degrading list: prebuilding nothing is recoverable at request time,
  *  a failed build is not. */
 export async function getLandingPaths(): Promise<string[][]> {
-  return landingsOf(await getCategoryTerms()).map(l => topicKey(l.term.path).split("/"));
+  return landingsOf(await getCategoryTerms()).map(l => l.path.split("/"));
 }
 
 export interface NavLeaf {
@@ -309,55 +330,39 @@ export interface NavLeaf {
   href: string;
   count: number;
 }
-export interface NavTopic {
-  label: string;
-  href: string;
-  /** The topic's two terms — its news listing and its reports listing. */
-  leaves: NavLeaf[];
-}
 export interface NavSection {
   label: string;
   href: string;
-  topics: NavTopic[];
+  /** The section's two listings — its news feed and its reports feed. */
+  leaves: NavLeaf[];
 }
 
 /**
- * The header menu: section -> topic -> {news, reports}.
+ * The header menu: section -> {news, reports}. Flat — see NAV_SECTIONS for
+ * why Economy's real taxonomy has no topic tier to nest a third level under,
+ * unlike Infotainment's section -> topic -> {news, reports}.
  *
- * The two upper levels link to LANDING pages (/celebrity), the leaves to
- * LISTINGS (/category/celebrity/news). Both URLs exist for the same term and
- * this is the only place that decides which one the menu points at, so a chip on
- * an article card — which uses categoryHref() — reaches the listing even though
- * the navbar reaches the landing page for the very same category.
+ * `section.href` is NAV_SECTIONS' pinned WordPress page; the leaves link to
+ * LISTINGS (/category/all-news/news-economic) via the ordinary categoryHref().
  */
 export async function getNavMenu(): Promise<NavSection[]> {
   const terms = await getCategoryTerms();
   if (terms.length === 0) return [];
 
   const bySlug = new Map(terms.map(t => [t.slug, t]));
-  const childrenOf = (id: number) => terms.filter(t => t.parent === id);
 
-  return SECTION_PAIRS.flatMap(pair => {
-    const news = bySlug.get(pair.news);
+  return NAV_SECTIONS.flatMap(s => {
+    const news = bySlug.get(s.news);
     if (!news) return [];
-    const reports = bySlug.get(pair.reports);
-    const reportTopics = reports ? childrenOf(reports.id) : [];
+    const reports = bySlug.get(s.reports);
 
-    const topics: NavTopic[] = childrenOf(news.id)
-      .sort((a, b) => topicRank(a.path) - topicRank(b.path))
-      .map(topic => {
-        const counterpart = reportTopics.find(r => topicKey(r.path) === topicKey(topic.path));
-        const leaves: NavLeaf[] = [
-          { label: CONTENT_TYPE_LABELS.news, href: categoryHref(topic.path), count: topic.count },
-        ];
-        // Two report topics are empty (culture, architecture). WordPress links them
-        // anyway, so we do too — the listing renders its empty state.
-        if (counterpart) {
-          leaves.push({ label: CONTENT_TYPE_LABELS.reports, href: categoryHref(counterpart.path), count: counterpart.count });
-        }
-        return { label: topic.name, href: landingHref(topic.path), leaves };
-      });
+    const leaves: NavLeaf[] = [
+      { label: CONTENT_TYPE_LABELS.news, href: categoryHref(news.path), count: news.count },
+    ];
+    if (reports) {
+      leaves.push({ label: CONTENT_TYPE_LABELS.reports, href: categoryHref(reports.path), count: reports.count });
+    }
 
-    return [{ label: news.name, href: landingHref(news.path), topics }];
+    return [{ label: news.name, href: s.href, leaves }];
   });
 }

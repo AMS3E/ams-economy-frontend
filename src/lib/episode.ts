@@ -67,6 +67,20 @@ export interface EpisodePage {
   showTitle: string;
 }
 
+/** A playable episode resolved directly by post id. This backs the Khmer
+ * Insider overview's watch-page treatment, whose working episode rail comes
+ * from the legacy HTML-fragment endpoint rather than `tv-show-episodes`. */
+export interface EpisodePreview {
+  id: number;
+  title: string;
+  episodeNumber: string;
+  video: EpisodeVideo | null;
+  runTime: string;
+  releaseDate: string;
+  description: string[];
+  showTitle: string;
+}
+
 /** Everything the detail endpoint knows, or null if it failed. The episode page
  *  is still worth rendering without it — title, neighbours and the grid all come
  *  from the list — so this never throws. */
@@ -95,6 +109,28 @@ async function fetchExcerpt(id: number): Promise<string> {
   } catch {
     return "";
   }
+}
+
+export async function getEpisodePreview(id: number): Promise<EpisodePreview | null> {
+  const [detail, excerpt] = await Promise.all([fetchDetail(id), fetchExcerpt(id)]);
+  if (!detail) return null;
+
+  const video = toVideo(detail.video);
+  const runTime =
+    (video?.kind === "vimeo" ? await fetchVimeoRunTime(detail.video.url) : "") ||
+    detail.run_time ||
+    "";
+
+  return {
+    id: detail.id,
+    title: detail.title,
+    episodeNumber: detail.episode_number,
+    video,
+    runTime,
+    releaseDate: formatReleaseDate(detail.release_date),
+    description: htmlToParagraphs(excerpt),
+    showTitle: detail.tv_show_title,
+  };
 }
 
 /** 404s for an unknown program slug, or an episode slug the show doesn't have.

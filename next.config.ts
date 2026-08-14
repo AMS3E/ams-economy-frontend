@@ -25,6 +25,12 @@ const nextConfig: NextConfig = {
     },
   },
   images: {
+    // economy.ams.com.kh resolves to 127.0.0.1/::1 in local dev (hosts file:
+    // local WordPress), which Next 16's image optimizer refuses to fetch by
+    // default (SSRF guard — "resolved to private ip"). Dev-only: production
+    // DNS for economy.ams.com.kh is a real public host, so this stays off in
+    // that build.
+    dangerouslyAllowLocalIP: process.env.NODE_ENV === "development",
     // The homepage uses decorative Unsplash photos that gracefully fall back
     // to a solid color if they fail to load (see CoverImage).
     remotePatterns: [
@@ -39,8 +45,14 @@ const nextConfig: NextConfig = {
       },
       {
         // WordPress uploads (ad creatives from the `advertise` endpoint).
+        // Some ad creatives are stored with a plain http:// source_url, so
+        // both protocols must be allowed or next/image rejects the src.
         protocol: "https",
-        hostname: "infotainment.ams.com.kh",
+        hostname: "economy.ams.com.kh",
+      },
+      {
+        protocol: "http",
+        hostname: "economy.ams.com.kh",
       },
       {
         // Author avatars — WordPress serves them from Gravatar (ក្រុមការងារ).

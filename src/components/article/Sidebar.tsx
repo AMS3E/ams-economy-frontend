@@ -3,10 +3,10 @@ import { css } from "@/styled-system/css";
 import CoverImage from "@/components/ui/CoverImage";
 import CategoryLinks from "@/components/ui/CategoryLinks";
 import SectionHeader from "@/components/ui/SectionHeader";
-import RankedList from "@/components/ui/RankedList";
-import type { ArticleRef, NamedList, PopularItem } from "@/lib/articles";
-import AdEmbed from "../ui/AdEmbed";
-import { kbPrasacPortrait } from "@/lib/promos";
+import MiniRow from "@/components/ui/MiniRow";
+import ReviveAdSlot from "@/components/ads/revive/ReviveAdSlot";
+import { revivePortrait } from "@/components/ads/revive/zones";
+import type { ArticleRef, NamedList } from "@/lib/articles";
 
 /** Category widget: vertical list of image-topped cards. The meta line sits
  *  outside the article link so its category link doesn't nest inside it. */
@@ -53,8 +53,21 @@ function CardList({ items }: { items: ArticleRef[] }) {
   );
 }
 
-export default function Sidebar({ popular, sidebarLists, emptyWidget }: { popular: PopularItem[]; sidebarLists: NamedList[]; emptyWidget: string }) {
-  const [first, second, third] = sidebarLists;
+/** One large lead card followed by compact thumbnail rows. */
+function FeaturedList({ items }: { items: ArticleRef[] }) {
+  const [lead, ...rest] = items;
+  return (
+    <div className={css({ display: "flex", flexDirection: "column", gap: "18px" })}>
+      {lead && <CardList items={[lead]} />}
+      {rest.map((item) => (
+        <MiniRow key={item.slug} item={item} />
+      ))}
+    </div>
+  );
+}
+
+export default function Sidebar({ sidebarLists }: { sidebarLists: NamedList[] }) {
+  const [economic, finance, realEstate, pr, innovation] = sidebarLists;
   return (
     <aside
       className={css({
@@ -66,44 +79,59 @@ export default function Sidebar({ popular, sidebarLists, emptyWidget }: { popula
         gap: "40px",
       })}
     >
-      <div>
-        <SectionHeader variant="underline" title="ប្រធានបទពេញនិយម" titleSize="22px" />
-        <RankedList items={popular} />
-        <div
-          className={css({
-            marginTop: "33px",
-          })}
-        >
-          <AdEmbed promo={kbPrasacPortrait} />
-        </div>
-      </div>
+      <ReviveAdSlot zone={revivePortrait} />
 
-      {[first, second].filter(Boolean).map((list) => (
-        <div key={list.heading}>
-          <SectionHeader variant="underline" title={list.heading} titleSize="22px" seeAllHref={list.href} />
-          <CardList items={list.items} />
-        </div>
-      ))}
-
-      {/* Empty widget — matches the live site's "No posts found" */}
-      <div>
-        <SectionHeader variant="underline" title={emptyWidget} />
-        <div className={css({ fontSize: "13px", color: "muted", padding: "6px 0" })}>No posts found.</div>
-        <div
-          className={css({
-            marginTop: "33px",
-          })}
-        >
-          <AdEmbed promo={kbPrasacPortrait} />
-        </div>
-      </div>
-
-      {third && (
+      {economic && (
         <div>
-          <SectionHeader variant="underline" title={third.heading} seeAllHref={third.href} />
-          <CardList items={third.items} />
+          <SectionHeader variant="underline" title={economic.heading} titleSize="22px" seeAllHref={economic.href} />
+          <CardList items={economic.items} />
         </div>
       )}
+
+      {finance && (
+        <div>
+          <SectionHeader variant="underline" title={finance.heading} titleSize="22px" seeAllHref={finance.href} />
+          <FeaturedList items={finance.items} />
+        </div>
+      )}
+
+      {realEstate && (
+        <div>
+          <SectionHeader variant="underline" title={realEstate.heading} titleSize="22px" seeAllHref={realEstate.href} />
+          <CardList items={realEstate.items} />
+        </div>
+      )}
+
+      <ReviveAdSlot zone={revivePortrait} />
+
+      {economic && (
+        <div>
+          <SectionHeader variant="underline" title={economic.heading} titleSize="22px" seeAllHref={economic.href} />
+          <CardList items={economic.items} />
+        </div>
+      )}
+
+      {finance && (
+        <div>
+          <SectionHeader variant="underline" title={finance.heading} titleSize="22px" seeAllHref={finance.href} />
+          <FeaturedList items={finance.items} />
+        </div>
+      )}
+
+      {pr && (
+        <div>
+          <SectionHeader variant="underline" title={pr.heading} titleSize="22px" seeAllHref={pr.href} />
+          <FeaturedList items={pr.items} />
+        </div>
+      )}
+
+      {innovation && (
+        <div>
+          <SectionHeader variant="underline" title={innovation.heading} titleSize="22px" seeAllHref={innovation.href} />
+          <CardList items={innovation.items} />
+        </div>
+      )}
+
     </aside>
   );
 }

@@ -71,11 +71,11 @@ export default function ThemeToggle() {
       title={label}
       className={css({
         display: "inline-flex",
-        color: "#e4e5ea",
+        color: "#595959",
         cursor: "pointer",
         userSelect: "none",
         transition: "color .2s",
-        _hover: { color: "#fff" },
+        _hover: { color: "#000" },
       })}
     >
       {mode === "light" ? <MoonIcon size={19} /> : mode === "dark" ? <ClockIcon size={19} /> : <SunIcon size={19} />}

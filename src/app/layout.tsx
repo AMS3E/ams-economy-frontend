@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Battambang } from "next/font/google";
+import Script from "next/script";
 import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/site";
 import "./globals.css";
 
@@ -56,7 +57,9 @@ export default function RootLayout({
       className={battambang.variable}
     >
       <body>
-        <script dangerouslySetInnerHTML={{ __html: themeInit }} />
+        <Script id="theme-init" strategy="beforeInteractive">
+          {themeInit}
+        </Script>
         {children}
       </body>
     </html>

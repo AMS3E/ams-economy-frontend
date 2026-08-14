@@ -5,6 +5,7 @@ import ProgramAbout from "@/components/program/ProgramAbout";
 import EpisodeCarousel from "@/components/program/EpisodeCarousel";
 import SeasonTabs from "@/components/program/SeasonTabs";
 import ProgramNews from "@/components/program/ProgramNews";
+import KhmerInsiderWatchPage from "@/components/program/KhmerInsiderWatchPage";
 import PosterBand from "@/components/home/PosterBand";
 import DailyEventsSection from "@/components/home/sections/DailyEventsSection";
 import LatestReportsSection from "@/components/home/sections/LatestReportsSection";
@@ -21,6 +22,7 @@ import { kbPrasacFullLandscape } from "@/lib/promos";
 import { notFound } from "next/navigation";
 import { getProgram, getProgramSlugs, programHref, routedProgram } from "@/lib/programs";
 import { categoryRefs } from "@/lib/articles";
+import { getKhmerInsiderWatchData } from "@/lib/khmer-insider";
 
 type Params = { params: Promise<{ slug: string }> };
 
@@ -47,6 +49,22 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
 
 export default async function ProgramPage({ params }: Params) {
   const { slug } = await params;
+
+  // Khmer Insider uses the supplied watch-page design: latest playable episode,
+  // season rail, Description and About. The remaining programmes keep the
+  // cinematic overview they were designed around.
+  if (slug === "khmer-insider") {
+    const data = await getKhmerInsiderWatchData();
+    return (
+      <KhmerInsiderWatchPage
+        program={data.program}
+        episode={data.episode}
+        episodes={data.episodes}
+        videoCover={data.videoCover}
+        currentEpisode={data.current}
+      />
+    );
+  }
 
   // getProgram() notFound()s on an unknown slug, so everything alongside it is
   // only ever wasted work for a 404 — cheap, and it keeps the page a single round

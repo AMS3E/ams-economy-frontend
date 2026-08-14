@@ -105,28 +105,35 @@ export async function getAuthorBySlug(slug: string): Promise<AuthorProfile | nul
  * which is a different — and much longer — list than the one the site publishes.
  * The block is an editorial pick, so the picks live here.
  *
- * The photo is pinned too, because no endpoint exposes it. WordPress serves these
- * portraits from the Simple Author Box plugin's user meta; the REST user object
- * only carries `avatar_urls`, and every author's Gravatar is unset (`d=mm`, the
- * blank silhouette) — which is exactly what our block was rendering. Yoast's
- * `og_image` and schema fall back to the same empty Gravatar.
+ * Confirmed 2026-08-12 against economy.ams.com.kh directly (ids 1086, 25, 13,
+ * 15, 23 — matches a live screenshot of the block, same names, same order).
+ * The PREVIOUS list here (triya-ams, chanreth-ams, sinvichka-ams,
+ * chansreypich-ams, vanthan-ams, avatars under `/infotainment/`) was
+ * infotainment.ams.com.kh's roster, not economy's — none of those slugs exist
+ * on this backend, so getTeam() below silently returned [] and the block
+ * always rendered empty. Same class of leftover-from-the-sister-project bug
+ * as program-curation.ts's CURATED_PROGRAMS (see programs.ts).
  *
- * Percent-encoded because two of the filenames are Khmer.
+ * The photo is pinned too — no REST endpoint exposes it (WordPress serves
+ * these portraits from the Simple Author Box plugin's user meta; the REST
+ * user object only carries `avatar_urls`, and every one of these accounts'
+ * Gravatar is unset, `d=mm`, the blank silhouette — confirmed on user 1086).
+ * Sourced instead straight from the live homepage's own rendered HTML, each
+ * `<img>` inside a `saboxplugin-gravatar` block next to that author's own
+ * `/author/<slug>` link (confirmed 2026-08-12) — the same box the block
+ * itself paints from, so these are exactly the live photos.
  */
 const TEAM = [
-  { slug: "triya-ams", avatar: "https://s3.ams.com.kh/infotainment/2022/03/08_Keo-Trya.png" },
-  { slug: "chanreth-ams", avatar: "https://s3.ams.com.kh/infotainment/2022/09/15_Thor-Chanreth.png" },
-  {
-    slug: "sinvichka-ams",
-    avatar:
-      "https://s3.ams.com.kh/infotainment/2021/10/%E1%9E%9F%E1%9F%8A%E1%9E%B7%E1%9E%93%E1%9E%9C%E1%9E%B7%E1%9E%85%E1%9F%92%E1%9E%86%E1%9E%B7%E1%9E%80%E1%9E%B6.png",
-  },
-  {
-    slug: "chansreypich-ams",
-    avatar:
-      "https://s3.ams.com.kh/infotainment/2021/10/%E1%9E%87%E1%9E%BD%E1%9E%84-%E1%9E%85%E1%9F%90%E1%9E%93%E1%9F%92%E1%9E%91%E1%9E%9F%E1%9F%92%E1%9E%9A%E1%9E%B8%E1%9E%96%E1%9F%81%E1%9E%87%E1%9F%92%E1%9E%9A.png",
-  },
-  { slug: "vanthan-ams", avatar: "https://s3.ams.com.kh/infotainment/2022/03/13_Svay-Vanthan.png" },
+  // លោក ហេង សុវណ្ណ | Mr. Heng Sovann
+  { slug: "sovann2-ams", avatar: "https://economy.ams.com.kh/wp-content/uploads/2021/05/hengsovann-2.webp" },
+  // លោក អា សុវណ្ណារ៉ា | Mr. Ea Sovannara
+  { slug: "sovannara-ams", avatar: "https://s3.ams.com.kh/economy/2021/03/Ea-Sovannara-01.jpg" },
+  // លោក សន សុនលី | Mr. San Sounly
+  { slug: "sounly-ams", avatar: "https://s3.ams.com.kh/economy/2021/03/SAN-SOUNLY-02.jpg" },
+  // លោក កែ ផុស | Mr. Ker Phors
+  { slug: "phors-ams", avatar: "https://s3.ams.com.kh/economy/2020/12/KER-PHORS.jpg" },
+  // កញ្ញា ម៉ាន់ ហ៊ុយលាង | Ms. Mann Huyleang
+  { slug: "huyleang-ams", avatar: "https://s3.ams.com.kh/economy/2021/03/MANN-HUYLEANG.jpg" },
 ] as const;
 
 /** The team block is WordPress's author list — its heading links to /author and

@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import Link from "next/link";
 import { css, cx } from "@/styled-system/css";
 import ThemeToggle from "./ThemeToggle";
@@ -6,7 +7,6 @@ import MobileNav from "./MobileNav";
 import { ChevronDownIcon, SearchIcon, UserIcon } from "@/components/icons";
 import { getNavPills, getProgramIcons, PROGRAM_ICON_LABEL } from "@/lib/navigation";
 import { getNavMenu } from "@/lib/categories";
-import { programHref } from "@/lib/programs";
 import { container } from "./shared";
 
 // The category menu. It opens on hover and on keyboard focus, so it needs no
@@ -14,8 +14,10 @@ import { container } from "./shared";
 // below it is the one exception: it highlights the program you are on, which
 // means reading the pathname, which means a hook. See ProgramIconStrip.)
 //
-// The top bar is painted dark in both themes, so these colors are literal rather
-// than tokens; a themed surface here would go white underneath a black bar.
+// The top bar is white in both themes (econome.kh's live masthead, verified in
+// global.css — not Infotainment's dark bar this component started as), so these
+// colors are literal rather than tokens; a themed surface here would fight the
+// site's own always-white header.
 //
 // The nav stretches to the bar's full height so a section's hover target is the
 // whole 64px, not just its text — which is also what puts the panel's top edge at
@@ -40,13 +42,36 @@ const navTrigger = css({
   display: "inline-flex",
   alignItems: "center",
   gap: "5px",
-  color: "#e4e5ea",
+  color: "#282828",
   fontSize: "15px",
   fontWeight: 500,
   whiteSpace: "nowrap",
   cursor: "pointer",
   transition: "color .2s",
-  _hover: { color: "#fff" },
+  // `#menu-ams-economy .menu-item a:hover` on the live site — a muted
+  // blue-gray, not black.
+  _hover: { color: "#949cb0" },
+});
+
+// Colors come from data (per-pill), so they're CSS custom properties rather
+// than literal `css()` values — Panda compiles atomic classes at build time,
+// but that leaves `_hover` free to override both background AND (inherited)
+// text color, which a plain inline `style` on the Link could not do. Matches
+// the live site's pill hover exactly: `#menu-ams-economy-secondary .menu-item
+// a:hover{background-color:#000;color:#fff}` — every pill goes solid black on
+// hover regardless of its own color, not just a filter/brightness tweak.
+const pillLink = css({
+  transform: "skewX(-18deg)",
+  marginLeft: "-1px",
+  display: "flex",
+  alignItems: "center",
+  px: "26px",
+  cursor: "pointer",
+  textDecoration: "none",
+  background: "var(--pill-bg)",
+  color: "var(--pill-color)",
+  transition: "background-color .2s, color .2s",
+  _hover: { background: "#000000", color: "#ffffff" },
 });
 
 // White in both themes, like the live menu — it hangs off a bar that is always
@@ -81,17 +106,6 @@ const submenu = css({
   },
 });
 
-// Opens to the right of its topic row, pulled up by the panel's own padding so
-// the first entry lines up with the row that spawned it.
-const flyout = css({ ...panel, top: "-9px", left: "100%", minWidth: "196px" });
-
-const topicItem = css({
-  position: "relative",
-  "& > .ams-flyout": { display: "none" },
-  _hover: { "& > .ams-flyout": { display: "block" } },
-  _focusWithin: { "& > .ams-flyout": { display: "block" } },
-});
-
 const row = css({
   display: "flex",
   alignItems: "center",
@@ -111,20 +125,38 @@ export default async function SiteHeader() {
   const [pills, progIcons, menu] = await Promise.all([getNavPills(), getProgramIcons(), getNavMenu()]);
 
   return (
-    <header>
+    // `.site-header.header-v3` in vodi-style.css — the shadow belongs to the
+    // WHOLE header (masthead + icons row as one unit), not just the icon row;
+    // an earlier pass had it on the icon row alone, then dropped it entirely
+    // when that turned out wrong. It's real, just on the outer element.
+    <header className={css({ boxShadow: "0 4px 2px -2px rgba(0, 0, 0, 0.3)" })}>
       {/* ===== TOP BAR ===== */}
-      <div className={css({ background: "#0a0b0f", width: "100%" })}>
+      {/* Ground truth from econome.kh's `#site-header .masthead` (global.css):
+          pure white, plus a 4px red gradient rendered ONLY on the top edge via
+          border-image (border-image-width's other three sides are 0). */}
+      <div
+        className={css({
+          background: "#ffffff",
+          width: "100%",
+          borderTop: "4px solid transparent",
+          borderImage: "linear-gradient(90deg, rgba(201,15,15,1) 0%, rgba(136,1,1,1) 100%)",
+          borderImageSlice: 1,
+          borderImageWidth: "4px 0px 0px 0px",
+        })}
+      >
         <div className={cx(container, css({ height: "64px", display: "flex", alignItems: "center", gap: { base: "14px", lg: "30px" } }))}>
           {/* Hamburger + drawer — mobile only. Fed the same data as the hover nav
               below so the two can never drift. It renders nothing on desktop. */}
           <MobileNav menu={menu} pills={pills} progIcons={progIcons} />
           <Link href="/" className={css({ display: "inline-flex", alignItems: "center", flex: "0 0 auto" })}>
-            {/* Official AMS Infotainment brand logo (SVG on the site's CDN). */}
+            {/* Official AMS Economy brand logo (SVG on the site's CDN, `economy` bucket). */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="https://s3.ams.com.kh/infotainment/2022/09/AMS-COLOUR-FULL-H28.svg" width={79} height={28} alt="AMS Infotainment" />
+            <img src="https://s3.ams.com.kh/economy/2022/09/AMS-COLOUR-FULL-H28.svg" width={79} height={28} alt="AMS Economy" />
           </Link>
-          {/* Section -> topic -> {news, reports}. WordPress nests the taxonomy the
-              other way round; getNavMenu() transposes it. */}
+          {/* Section -> {news, reports}. Flat — Economy's taxonomy has no
+              topic tier below its 6 sections, unlike Infotainment's, so the
+              submenu lists a section's two leaves directly (see NAV_SECTIONS
+              in categories.ts for why this can't be a rule-derived nesting). */}
           <nav className={navRoot} aria-label="ប្រភេទអត្ថបទ">
             {menu.map((section) => (
               <div key={section.href} className={navItem}>
@@ -134,23 +166,10 @@ export default async function SiteHeader() {
                 </Link>
 
                 <div className={cx(submenu, "ams-submenu")}>
-                  {section.topics.map((topic) => (
-                    <div key={topic.href} className={topicItem}>
-                      <Link href={topic.href} className={row}>
-                        <span>{topic.label}</span>
-                        <span className={css({ color: "#9a9ba3" })} aria-hidden>
-                          ›
-                        </span>
-                      </Link>
-
-                      <div className={cx(flyout, "ams-flyout")}>
-                        {topic.leaves.map((leaf) => (
-                          <Link key={leaf.href} href={leaf.href} className={row}>
-                            {leaf.label}
-                          </Link>
-                        ))}
-                      </div>
-                    </div>
+                  {section.leaves.map((leaf) => (
+                    <Link key={leaf.href} href={leaf.href} className={row}>
+                      {leaf.label}
+                    </Link>
                   ))}
                 </div>
               </div>
@@ -168,23 +187,12 @@ export default async function SiteHeader() {
             {pills.map((p) => (
               <Link
                 key={p.slug}
-                href={programHref(p.slug)}
-                className={css({
-                  transform: "skewX(-18deg)",
-                  marginLeft: "-1px",
-                  display: "flex",
-                  alignItems: "center",
-                  px: "26px",
-                  cursor: "pointer",
-                  textDecoration: "none",
-                  transition: "filter .2s",
-                  _hover: { filter: "brightness(1.1)" },
-                })}
-                style={{ background: p.background }}
+                href={p.href}
+                className={pillLink}
+                style={{ "--pill-bg": p.background, "--pill-color": p.color } as CSSProperties}
               >
                 <span
                   className={css({
-                    color: "#fff",
                     fontSize: "15px",
                     fontWeight: 600,
                     whiteSpace: "nowrap",
@@ -203,7 +211,7 @@ export default async function SiteHeader() {
               marginLeft: "18px",
             })}
           >
-            <span className={css({ display: "inline-flex", color: "#e4e5ea", cursor: "pointer", _hover: { color: "#fff" } })}>
+            <span className={css({ display: "inline-flex", color: "#595959", cursor: "pointer", _hover: { color: "#000" } })}>
               <SearchIcon size={20} />
             </span>
             <ThemeToggle />
@@ -227,25 +235,36 @@ export default async function SiteHeader() {
       </div>
 
       {/* ===== PROGRAM ICONS ROW ===== */}
+      {/* Ground truth from `#site-header .vodi-navigation-v3` (global.css): a
+          faint black wash over the page background, not a solid dark fill. */}
       <div
         className={css({
-          background: "#0e0f15",
+          background: "rgba(0, 0, 0, 0.07)",
           width: "100%",
-          borderTopWidth: "2px",
+          paddingTop: "4px",
+          paddingBottom: "4px",
+          borderTopWidth: "1px",
           borderTopColor: "#bdc3c7",
           borderTopStyle: "solid",
-          boxShadow: "0 4px 2px -2px rgba(0, 0, 0, 0.3)",
         })}
       >
         <div
           className={cx(
             container,
             css({
-              height: "64px",
+              // No fixed height on the live `.site_header__secondary-nav-v3`
+              // (`display:flex;align-items:center;` only) — height comes from
+              // content (~48px: the link's own padding + the 26px icon), not
+              // a hardcoded box. The 64px this used to carry left extra empty
+              // space top/bottom the real row never has.
               display: "flex",
               alignItems: "center",
               justifyContent: "flex-end",
               gap: "18px",
+              // `#page #site-header .vodi-navigation-v3 .container-fluid
+              // .site_header__secondary-nav-v3{padding-right:21% !important}`
+              // — pulls the whole row in from the right edge on wide screens.
+              paddingRight: "21%",
               overflowX: "auto",
               scrollbarWidth: "none",
               "&::-webkit-scrollbar": { display: "none" },
@@ -254,7 +273,7 @@ export default async function SiteHeader() {
         >
           <span
             className={css({
-              color: "#9a9ba3",
+              color: "#8e8e8e",
               fontSize: "17px",
               whiteSpace: "nowrap",
               marginRight: "4px",

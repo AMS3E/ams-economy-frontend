@@ -8,7 +8,7 @@ import { notFound } from "next/navigation";
 import { ApiError, apiFetch, safeTag } from "./api/client";
 import { fetchArticleList } from "./api/article-list";
 import { categoryHref, getCategoryDepths, getCategoryHrefs, getCategoryTerms } from "./categories";
-import { mapArticle, mapArticleRef } from "./api/mappers";
+import { decodeEntities, mapArticle, mapArticleRef } from "./api/mappers";
 import type { WpArticleDetail } from "./api/wp-types";
 import { getFeaturedPrograms, type FeaturedProgram } from "./navigation";
 
@@ -136,6 +136,51 @@ export async function categoryRefsByIds(ids: string, pageSize: number): Promise<
   }
 }
 
+interface WpPopularPost {
+  id: number;
+  slug: string;
+  date?: string;
+  title?: { rendered?: string };
+  excerpt?: { rendered?: string };
+  categories?: number[];
+  pageviews?: string;
+  yoast_head_json?: {
+    og_image?: { url?: string }[];
+    twitter_image?: string;
+  };
+}
+
+/** The most-viewed published posts over the last 30 days, in WPP's ranking
+ * order. This is the real popularity signal; category feeds are date-ordered.
+ * Returns [] on failure because the homepage block is decorative. */
+export async function popularArticleRefs(pageSize = 9): Promise<ArticleRef[]> {
+  try {
+    const fields = "id,slug,date,title,excerpt,categories,pageviews,yoast_head_json";
+    const [posts, terms] = await Promise.all([
+      apiFetch<WpPopularPost[]>(
+        `/wordpress-popular-posts/v1/popular-posts?limit=${pageSize}&range=last30days&_fields=${fields}`,
+        { revalidate: 3600, tags: ["articles", "popular-articles"] },
+      ),
+      getCategoryTerms(),
+    ]);
+    const byId = new Map(terms.map((term) => [term.id, term]));
+
+    return (posts ?? []).map((post) => ({
+      slug: post.slug,
+      title: decodeEntities(post.title?.rendered ?? "").trim(),
+      image: post.yoast_head_json?.og_image?.[0]?.url ?? post.yoast_head_json?.twitter_image ?? "",
+      date: post.date ? post.date.slice(0, 10).split("-").reverse().join("/") : "",
+      categories: (post.categories ?? []).flatMap((id) => {
+        const term = byId.get(id);
+        return term ? [{ id, name: term.name, href: categoryHref(term.path) }] : [];
+      }),
+      description: decodeEntities(post.excerpt?.rendered?.replace(/<[^>]+>/g, "") ?? "").trim(),
+    }));
+  } catch {
+    return [];
+  }
+}
+
 /** Slugs of the most recent articles — used by generateStaticParams to prebuild
  *  the hot article pages. */
 export async function getRecentArticleSlugs(limit = 12): Promise<string[]> {
@@ -175,12 +220,10 @@ export async function getArticle(slug: string): Promise<Article> {
 
 export interface ArticleExtras {
   // sidebar (right column)
-  popular: PopularItem[];
   sidebarLists: NamedList[];
-  emptyWidget: string;
   // below the article body
   recentReports: NamedList;
-  entertainment: NamedList;
+  generalNews: NamedList;
   programs: FeaturedProgram[];
   videos: NamedList;
   prevPost: { slug: string; title: string; meta: string };
@@ -191,65 +234,59 @@ export interface ArticleExtras {
 const metaLine = (r?: ArticleRef) => (r ? [r.categories?.map((c) => c.name).join(", "), r.date].filter(Boolean).join(" · ") : "");
 
 /**
- * The three category widgets in the article sidebar.
+ * The category widgets in the article sidebar.
  *
- * Their HEADINGS are editorial and are not the term names — រសជាតិ ("flavour")
- * heads the TRAVEL feed, and ភាពយន្ត heads `movie-and-music`. That mismatch is
- * exactly why these used to be sliced out of the generic recent feed and nobody
- * noticed: the headings gave no hint of which term they belonged to. Each one is
- * scoped to its own category on the live site, so each is fetched from it here.
+ * Their headings are editorial labels, so each entry explicitly names the
+ * category feed it belongs to instead of being sliced from a general feed.
  */
 const SIDEBAR_WIDGETS = [
-  { heading: "រសជាតិ", slug: "life-style-travel-news", size: 3 },
-  { heading: "ស្នេហានិងទំនាក់ទំនង", slug: "life-style-love-and-relation-news", size: 5 },
-  { heading: "ភាពយន្ត", slug: "entertainment-movie-and-music-news", size: 5 },
+  { heading: "សេដ្ឋកិច្ច", slug: "news-economic", href: "/economic", size: 3 },
+  { heading: "ហិរញ្ញវត្ថុ", slug: "news-finance", href: "/finance", size: 5 },
+  { heading: "អចលនទ្រព្យ", slug: "news-realestate", href: "/real-estate", size: 4 },
+  { heading: "អត្ថបទពាណិជ្ជកម្ម", slug: "news-pr", href: "/pr", size: 6 },
+  {
+    heading: "អាជីវកម្មថ្មី និងនវានុវត្ត",
+    slug: "news-startup-and-innovation",
+    href: "/start-up-innovation",
+    size: 3,
+  },
 ] as const;
 
 /** Sidebar widgets + below-article sections.
  *
  *  Every block that carries a category HEADING is fetched from that category —
- *  the three sidebar widgets and the two RelatedColumns blocks. Only the blocks
- *  with no category in their name (ប្រធានបទពេញនិយម, ព័ត៌មានសង្ខេប,
- *  ព័ត៌មានផ្សេងៗទៀត and the prev/next pager) are windows into the general feed,
+ *  the sidebar widgets and the two RelatedColumns blocks. Only the blocks
+ *  with no category in their name (ព័ត៌មានសង្ខេប, ព័ត៌មានផ្សេងៗទៀត and the
+ *  prev/next pager) are windows into the general feed,
  *  and they take DISJOINT windows of it so no article shows up twice on the page.
  *
- *  `get-article-by-category-slug` aggregates over a term's descendants, so
- *  "reports" and "entertainment-news" cover their whole subtree. It takes a term
- *  SLUG, not a URL path — the entertainment listing lives at
- *  /category/entertainment-news/news but its term is `entertainment-news`. */
+ *  The two main-column feeds use Economy's direct root IDs: 565 for reports and
+ *  515 for general news. */
 export async function getArticleExtras(): Promise<ArticleExtras> {
-  const [refs, programs, reports, entertainment, widgets, hrefs] = await Promise.all([
-    recentRefs(24, ["articles"]),
+  const [refs, programs, reports, generalNews, widgets] = await Promise.all([
+    recentRefs(13, ["articles"]),
     getFeaturedPrograms(),
-    categoryRefs("reports", 8),
-    categoryRefs("entertainment-news", 9),
+    categoryRefsByIds("565", 9),
+    categoryRefsByIds("515", 8),
     Promise.all(SIDEBAR_WIDGETS.map((w) => categoryRefs(w.slug, w.size))),
-    getCategoryTerms(),
   ]);
 
   const at = (start: number, n: number) => refs.slice(start, start + n);
-  const bySlug = new Map(hrefs.map((t) => [t.slug, t]));
-  const listing = (slug: string) => {
-    const term = bySlug.get(slug);
-    return term ? categoryHref(term.path) : categoryHref(slug);
-  };
 
   return {
-    popular: at(0, 5).map((r) => ({ slug: r.slug, title: r.title })),
     sidebarLists: SIDEBAR_WIDGETS.map((w, i) => ({
       heading: w.heading,
       items: widgets[i],
-      href: listing(w.slug),
+      href: w.href,
     })),
-    emptyWidget: "ដំណើរកម្សាន្ត",
     recentReports: { heading: "របាយការណ៍ថ្មីៗ", items: reports },
     // RelatedColumns renders the first item as a large featured card, the rest as rows.
-    entertainment: { heading: "អត្ថបទកម្សាន្ត", items: entertainment },
+    generalNews: { heading: "ព័ត៌មានទូទៅ", items: generalNews },
     programs,
-    videos: { heading: "ព័ត៌មានសង្ខេប", items: at(5, 8) },
-    otherNews: { heading: "ព័ត៌មានផ្សេងៗទៀត", items: at(13, 9) },
-    prevPost: { slug: refs[22]?.slug ?? "#", title: refs[22]?.title ?? "", meta: metaLine(refs[22]) },
-    nextPost: { slug: refs[23]?.slug ?? "#", title: refs[23]?.title ?? "", meta: metaLine(refs[23]) },
+    videos: { heading: "ព័ត៌មានសង្ខេប", items: at(0, 8) },
+    otherNews: { heading: "ព័ត៌មានផ្សេងៗទៀត", items: at(8, 3) },
+    prevPost: { slug: refs[11]?.slug ?? "#", title: refs[11]?.title ?? "", meta: metaLine(refs[11]) },
+    nextPost: { slug: refs[12]?.slug ?? "#", title: refs[12]?.title ?? "", meta: metaLine(refs[12]) },
   };
 }
 

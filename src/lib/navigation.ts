@@ -16,27 +16,39 @@
 /** `slug` keys into the program registry — see src/lib/programs.ts, which owns
  *  the WordPress ids and the canonical URLs.
  *
- *  `background` is a full CSS background value, not a color: each pill is a
- *  gradient. It is applied inline in SiteHeader — Panda compiles its styles at
- *  build time, so a value coming from data cannot go through `css()`. */
+ *  `background` is a full CSS background value. It is applied inline in
+ *  SiteHeader — Panda compiles its styles at build time, so a value coming
+ *  from data cannot go through `css()`. */
 export interface NavPill {
   label: string;
   background: string;
+  /** Text color at rest — always white today, but per-pill data since hover
+   *  (SiteHeader's pillLink / MobileNav's pill) overrides it via the same
+   *  --pill-color custom property. */
+  color: string;
   slug: string;
+  /** /program/<slug> — inlined here rather than computed via programHref()
+   *  so this stays a plain data array: importing programs.ts at module scope
+   *  would drag its server fetch layer into MobileNav's client bundle (see
+   *  this file's header comment). */
+  href: string;
 }
 
-// The pills are painted on the dark top bar, and each program owns its own
-// gradient. The angles are per-program and deliberate — they are not a series.
+// Transcribed from economy.ams.com.kh's live `#menu-ams-economy-secondary`
+// (2026-08-12) — flat colors, not gradients (the Infotainment pills these
+// replaced were gradients; Economy's theme CSS sets a plain background-color
+// per item). Order and colors verified against the compiled customizer CSS:
+// nth-child(2..4) carry explicit overrides (#233259/#897b61/#c70003); item 1
+// has none in that dump (so its computed color would be the pill row's
+// #1f1f1f default) but #fab314 is confirmed independently — the SAME program
+// gets that exact color in `#menu-ams-economy-mobile`'s nth-child(8), and it
+// matches what the live page actually renders. Text is white on all four
+// (`#menu-ams-economy-secondary .menu-item a{color:#ffffff}`).
 const NAV_PILLS: NavPill[] = [
-  { label: "បើកសោជីវិត", background: "linear-gradient(168deg, #e67e22 0%, #e74c3c 100%)", slug: "unlock-the-life" },
-  { label: "ចង់ដឹងរឿងគេ", background: "linear-gradient(105deg, #8e44ab 0%, #5e2b72 100%)", slug: "reaction" },
-  { label: "វនយាត្រា", background: "linear-gradient(124deg, #28a35b 0%, #0f4c1d 100%)", slug: "vanna-yeatra" },
-  { label: "Cicada Agent", background: "linear-gradient(135deg, #0bb6aa 0%, #2cb5e8 100%)", slug: "cicada-agent" },
-  {
-    label: "ព្រះនាងកង្កែប",
-    background: "linear-gradient(90deg, rgba(145,145,145,1) 0%, rgba(184,184,184,1) 0%, rgba(156,156,156,1) 100%)",
-    slug: "ladyfrog",
-  },
+  { label: "Khmer Insider", background: "#fab314", color: "#fff", slug: "khmer-insider", href: "/program/khmer-insider" },
+  { label: "វិថីហិរញ្ញវត្ថុ", background: "#233259", color: "#fff", slug: "financial-street", href: "/program/financial-street" },
+  { label: "មរតកគំនិត", background: "#897b61", color: "#fff", slug: "the-legacy", href: "/program/the-legacy" },
+  { label: "កម្ពុជា 360°", background: "#c70003", color: "#fff", slug: "cambodia-360", href: "/program/cambodia-360" },
 ];
 
 export async function getNavPills(): Promise<NavPill[]> {
@@ -49,46 +61,50 @@ export interface ProgramIcon {
   title: string;
   image: string;
   slug: string;
+  /** Where the icon links. The live-fetched path (toProgramIcon below) uses
+   *  the menu item's own economy.ams.com.kh URL directly — see ProgramIconStrip's
+   *  header comment for why: these point at the live site, not /program/<slug>.
+   *  The hardcoded fallback below now carries the same real economy.ams.com.kh
+   *  URLs, transcribed off live rather than guessed. */
+  href: string;
 }
 
 /** Label that introduces the icon strip ("Digital content:"). */
 export const PROGRAM_ICON_LABEL = "មាតិកាឌីជីថល:";
 
-// The titles are live's own menu labels, byte for byte (the strip's markup
-// carries them in `.menu-image-title` spans). Seven of these used to be English
-// or a different word — "Green Box" for ប្រអប់បៃតង, "អូបសុខ" for អផ្សុក.
+// Transcribed from economy.ams.com.kh's live `#menu-secondary-nav-v3-menu`
+// (2026-08-12) — titles and image URLs byte for byte from the strip's own
+// `.menu-image-title` spans and `<img src>`s. This replaces the old
+// Infotainment icon strip (13 programs) wholesale: Economy's is a different,
+// shorter list (7) with no overlap. `financial-talk`'s live href actually
+// points at one specific episode (`/program/financial-talk/s1e7`) rather than
+// the program's own page — kept here as the program-level link instead.
 const PROGRAM_ICONS: ProgramIcon[] = [
-  { title: "Learn The World", image: "https://s3.ams.com.kh/infotainment/2025/11/01_LNTW_PWPF-21x36.jpg", slug: "learn-the-world" },
-  { title: "ជ្រុងមួយនៃភ្នំពេញ", image: "https://s3.ams.com.kh/infotainment/2025/08/05_CNPS01_LDSM-01-1-36x36.jpg", slug: "jroung-phnom-penh" },
-  { title: "អាថ៌កំបាំងក្រោមមេឃ", image: "https://s3.ams.com.kh/infotainment/2025/03/01_MYSSO1_PICN-48x48.png", slug: "athkombang-krom-mekh" },
-  { title: "អូនខ្លាច", image: "https://s3.ams.com.kh/infotainment/2025/03/01_FECUS01_PICN-48x48.png", slug: "oun-khlach" },
-  { title: "មេនាំរឿង", image: "https://s3.ams.com.kh/infotainment/2025/03/01_MOTS01_ICOS.svg", slug: "me-noam-rueng" },
-  { title: "Daily Feed", image: "https://s3.ams.com.kh/infotainment/2023/07/01_DAILY-FEEDS2_H28.svg", slug: "daily-feed" },
-  { title: "The Fact", image: "https://s3.ams.com.kh/infotainment/2023/07/01_THE1.svg", slug: "the-fact" },
-  { title: "១នាទីដើម្បីសុខភាព", image: "https://s3.ams.com.kh/infotainment/2022/09/WEB-ICON-1MIN_02.svg", slug: "1-minute-for-health" },
-  { title: "អផ្សុក", image: "https://s3.ams.com.kh/infotainment/2022/09/WEB-ICON-OBSOK_02.svg", slug: "obsok" },
-  { title: "ប្រអប់បៃតង", image: "https://s3.ams.com.kh/infotainment/2022/09/WEB-ICON-GREENBOX_02.svg", slug: "green-box" },
-  { title: "ពិតអត់", image: "https://s3.ams.com.kh/infotainment/2022/09/WEB-ICON-FAC-CHECK_03.svg", slug: "fact-check" },
-  { title: "ស្តូឌីយូ១១", image: "https://s3.ams.com.kh/infotainment/2022/09/WEB-ICON-STDUIO-11_02.svg", slug: "studio-11" },
-  { title: "តាមចិត្តម៉ូម៉ូ", image: "https://s3.ams.com.kh/infotainment/2022/09/TAMCHET-MOMO_LOGO_WEB-02.svg", slug: "tamchet-momo" },
+  { title: "អំពី គន្លឹះហិរញ្ញវត្ថុ", image: "https://s3.ams.com.kh/economy/2021/05/02_FILO_PWPF-21x36.webp", slug: "financial-talk", href: "https://economy.ams.com.kh/program/financial-talk" },
+  { title: "អក្ខរកម្មឌីជីថល", image: "https://s3.ams.com.kh/economy/2025/04/09_DGLTS01_LDSM-01Primary-Logo_Horizontal.png", slug: "digital-literacy", href: "https://economy.ams.com.kh/movie/digital-literacy" },
+  { title: "ឧស្សាហកម្ម ៤.០", image: "https://s3.ams.com.kh/economy/2025/03/01_IR4.0S01_ICOS.svg", slug: "industry4.0", href: "https://economy.ams.com.kh/movie/industry4.0" },
+  { title: "ចំណេះដឹងហិរញ្ញវត្ថុ", image: "https://s3.ams.com.kh/economy/2025/03/03_FINLS02_PICN-new.png", slug: "financial-literacy", href: "https://economy.ams.com.kh/movie/financial-literacy" },
+  { title: "ធនធានស្រុកយើង", image: "https://s3.ams.com.kh/economy/2025/02/01_ORESS01_ICOS.png", slug: "our-reources", href: "https://economy.ams.com.kh/program/our-reources" },
+  { title: "Hot Topic", image: "https://s3.ams.com.kh/economy/2022/12/HOT-TOPICS-LOGO-GIF-1.gif", slug: "hot-topic", href: "https://economy.ams.com.kh/program/hot-topic" },
+  { title: "Read News", image: "https://s3.ams.com.kh/economy/2022/09/READ-NEWS-LOGO-H32.svg", slug: "read-news", href: "https://economy.ams.com.kh/economic/read-news/" },
 ];
 
 /**
  * The icon strip, from the CMS.
  *
- * This is WordPress's "AMS Infotainment Third Menu", the same menu the old
- * theme renders and the same one the dashboard's Menus screen edits — so an
- * editor's change lands on both sites. Core REST cannot serve it (both
- * /wp/v2/menus and /wp/v2/menu-items answer 401 to anonymous callers, measured
- * 2026-08-05), so the read goes through the fast path's pub-menu resource.
+ * Core REST cannot serve WordPress menus (both /wp/v2/menus and
+ * /wp/v2/menu-items answer 401 to anonymous callers, measured 2026-08-05 on
+ * the Infotainment backend), so the read goes through the fast path's
+ * pub-menu resource instead.
  *
- * The hardcoded list below stays as the fallback, and it is not dead weight:
- * until plugin v1.5.0 is deployed, pub-menu 404s and this returns the constant
- * — which is exactly what the site rendered before. Worth knowing when
- * comparing the two: the LIVE menu carries 14 items, the constant 13. The
- * missing one is ស្ថាបត្យកម្មសកល (global_architecture, added 2026-07), which
- * has been on the WordPress site and absent here ever since — the strip going
- * live-driven fixes that by itself.
+ * ⚠ `menu: "ams-infotainment-third-menu"` below is carried over from before
+ * the Economy rebrand and is UNVERIFIED against this backend — economy.ams.com.kh
+ * almost certainly registers its `មាតិកាឌីជីថល` menu (`#menu-secondary-nav-v3-menu`
+ * in the live markup — see PROGRAM_ICONS above) under a different name. If it
+ * 404s, this silently falls back to the hardcoded list below, which is
+ * harmless (that list is itself transcribed off the same live menu, 2026-08-12)
+ * but means editor changes on that menu won't reach the site until the real
+ * slug is found and swapped in here.
  */
 export async function getProgramIcons(): Promise<ProgramIcon[]> {
   try {
@@ -134,7 +150,7 @@ interface FastMenuItem {
 function toProgramIcon(item: FastMenuItem, curated: CuratedLike[]): ProgramIcon | null {
   const image = firstIconUrl(item.images, item.meta?.["_menu_item_image_size"]);
   if (!image) return null;
-  return { title: item.title, image, slug: slugFromMenuUrl(item.url, curated) };
+  return { title: item.title, image, slug: slugFromMenuUrl(item.url, curated), href: item.url };
 }
 
 /** Just the two fields the URL match needs, so this module doesn't depend on

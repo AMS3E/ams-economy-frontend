@@ -9,10 +9,10 @@
 
 import { fetchArticleList, type ArticleListQuery } from "./api/article-list";
 import { mapHomeCard } from "./api/mappers";
-import { getCategoryHrefs } from "./categories";
+import { getCategoryHrefs, getCategoryTerms, NAV_SECTIONS } from "./categories";
 import { fetchEpisodeCards } from "./episodes";
 import { getFeaturedProgram } from "./featured-program";
-import type { CategoryLink } from "./articles";
+import { categoryRefs, categoryRefsByIds, popularArticleRefs, type CategoryLink, type PopularItem } from "./articles";
 
 // MasVideos tv_show IDs (episodes link to a show via `_tv_show_id`), each paired
 // with our program slug so its cards can link to /program/<slug>/<episode>.
@@ -23,12 +23,12 @@ const TV_SHOW_OBSOK = { slug: "obsok", id: 14512 }; // អផ្សុក
  *  scoped to.
  *
  *  It does NOT aggregate the tree beneath it: `category_id` (web/*) and
- *  `categories` (core) both match DIRECT assignments only, so this id reaches ~780
- *  of the site's ~10,450 articles rather than all of them. Every RECENT article
- *  carries the root tag, which is all a three-day window ever sees — but that is
- *  why the id can't be traded for `slug=all-news` (which does aggregate, 10,283)
- *  without changing what the tabs return. */
-const ALL_NEWS_ID = 6913;
+ *  `categories` (core) both match DIRECT assignments only, so this id reaches
+ *  only articles directly tagged with it, not the whole subtree. Every RECENT
+ *  article carries the root tag, which is all a three-day window ever sees —
+ *  but that is why the id can't be traded for `slug=all-news` (which does
+ *  aggregate the full subtree) without changing what the tabs return. */
+const ALL_NEWS_ID = 515;
 
 /** Cards per page of ព្រឹត្តិការណ៍ប្រចាំថ្ងៃ: the lead card plus its 2×2 cluster. */
 const NEWS_PAGE_SIZE = 5;
@@ -180,6 +180,25 @@ const fetchNewsPage = (page: number) =>
     tags: ["articles", "home"],
   });
 
+/** មាតិការសនិយម — one tab per NAV_SECTIONS term (economic/finance/real-estate/
+ *  business/pr/start-up-innovation), four articles each, switching in place.
+ *  Reuses NAV_SECTIONS (categories.ts) rather than re-pinning the same six
+ *  slugs here — see its header comment for why they can't be derived. */
+async function getMatikaTabs() {
+  const [terms, ...tabItems] = await Promise.all([
+    getCategoryTerms(),
+    ...NAV_SECTIONS.map((s) => categoryRefs(s.news, 4)),
+  ]);
+  const bySlug = new Map(terms.map((t) => [t.slug, t]));
+  return {
+    heading: "អត្ថបទថ្មីៗដែលលោកអ្នកគួរយល់ដឹង",
+    tabs: NAV_SECTIONS.map((s, i) => ({
+      label: bySlug.get(s.news)?.name ?? s.news,
+      href: s.href,
+      items: tabItems[i],
+    })),
+  };
+}
 
 /**
  * All homepage feed content in one call.
@@ -202,7 +221,10 @@ const fetchNewsPage = (page: number) =>
  * losing it must not take down a page about something else.
  */
 export async function getHomeFeed(newsPage = 1, dailyIsSubject = false) {
-  const [daily, reports, life, health, healthFromStart, obsok, featured] = await Promise.all([
+  const [
+    daily, reports, life, health, healthFromStart, obsok, featured,
+    latestNews, recentArticles, innovation, economic, realestate, business, finance, matika, entertainment,
+  ] = await Promise.all([
     // ព្រឹត្តិការណ៍ប្រចាំថ្ងៃ — one page of the news root, newest first. This was
     // three day tabs until the date filter was dropped for a pager; the day
     // windows (and wp-core's fetchDayCards) now serve only the landing pages.
@@ -221,6 +243,25 @@ export async function getHomeFeed(newsPage = 1, dailyIsSubject = false) {
     fetchEpisodeCards(TV_SHOW_HEALTH.slug, TV_SHOW_HEALTH.id, 12, "oldest"),
     fetchEpisodeCards(TV_SHOW_OBSOK.slug, TV_SHOW_OBSOK.id, 12),
     getFeaturedProgram(),
+    // របាយការណ៍ថ្មីៗ — five articles assigned directly to category 565.
+    categoryRefsByIds("565", 5),
+    // ព័ត៌មានពេញនិយម — WPP's nine most-viewed posts over the last 30 days.
+    popularArticleRefs(9),
+    // អាជីវកម្មថ្មី និងនវានុវត្ត — the news-startup-and-innovation section (see
+    // NAV_SECTIONS in categories.ts), lead card + 3 rows.
+    categoryRefs("news-startup-and-innovation", 4),
+    // សេដ្ឋកិច្ច — the news-economic section's own feed, as a ranked list.
+    categoryRefs("news-economic", 7),
+    // អចលនទ្រព្យ / ជំនួញ — three-up card rows, the other two NAV_SECTIONS terms.
+    categoryRefs("news-realestate", 3),
+    categoryRefs("news-business", 3),
+    // ហិរញ្ញវត្ថុ — beside them, a thumbnail list.
+    categoryRefs("news-finance", 5),
+    // មាតិការសនិយម — all six NAV_SECTIONS terms as switching tabs.
+    getMatikaTabs(),
+    // អត្ថបទកម្សាន្ត — Economy's taxonomy has no entertainment-news term (that's
+    // Infotainment's), so this runs on top-news, the closest real analog.
+    categoryRefs("top-news", 3),
   ]);
 
   return {
@@ -236,6 +277,15 @@ export async function getHomeFeed(newsPage = 1, dailyIsSubject = false) {
     healthFromStart,
     obsokGrid: obsok,
     featured,
+    latestNews,
+    recentArticles,
+    innovation,
+    economic: economic.map((r): PopularItem => ({ slug: r.slug, title: r.title })),
+    realestate,
+    business,
+    finance,
+    matika,
+    entertainment,
   };
 }
 

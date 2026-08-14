@@ -18,10 +18,16 @@ export default function EpisodeCarousel({
   episodes,
   title = "វគ្គថ្មីៗ",
   seeAllHref,
+  unoptimized,
+  autoScrollMs,
 }: {
   episodes: HomeCard[];
   title?: string;
   seeAllHref?: string;
+  /** See CoverImage's `unoptimized` — applied to every card. */
+  unoptimized?: boolean;
+  /** Optional one-card autoplay interval for this rail. */
+  autoScrollMs?: number;
 }) {
   if (episodes.length === 0) return null;
 
@@ -35,6 +41,8 @@ export default function EpisodeCarousel({
           year: e.ep,
           href: e.href,
         }))}
+        unoptimized={unoptimized}
+        autoScrollMs={autoScrollMs}
       />
     </section>
   );

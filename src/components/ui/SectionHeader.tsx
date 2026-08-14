@@ -43,6 +43,8 @@ export default function SectionHeader({
     <Link href={seeAllHref} className={seeAllStyle}>
       {label}
     </Link>
+  ) : seeAllText ? (
+    <span className={seeAllStyle}>{seeAllText}</span>
   ) : null;
 
   if (variant === "underline") {

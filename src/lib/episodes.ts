@@ -17,6 +17,7 @@
 // not a field rename: the slug it produces depends on the whole episode list.
 
 import { apiFetch } from "./api/client";
+import { decodeEntities } from "./api/mappers";
 import type { HomeCard } from "./home-data";
 import type { WpEpisode, WpListEnvelope } from "./api/wp-types";
 
@@ -307,4 +308,165 @@ export async function fetchEpisodeCards(
 
   const newest = size === undefined ? episodes : episodes.slice(-size);
   return [...newest].reverse().map(ep => toCard(ep, programSlug));
+}
+
+/** One card in fetchEpisodeRail's result — see that function for why this
+ *  exists alongside Episode/HomeCard rather than reusing them. */
+export interface RailEpisode {
+  id: number;
+  /** The LIVE WordPress episode page — see fetchEpisodeRail for why this
+   *  isn't one of our own /program/<slug>/<episode> routes. */
+  href: string;
+  thumbnail: string;
+  title: string;
+  /** "S2:E20", parsed from the WP permalink's own slug segment. "" if the
+   *  permalink doesn't have one (daily-feed-style shows). */
+  label: string;
+  /** Runtime and Added date as printed by the legacy watch-page rail. */
+  meta: string;
+}
+
+interface WpEpisodeRail {
+  episode_list_html?: string;
+  season_dropdown_html?: string;
+  query?: { season?: number };
+}
+
+// One <li class="episode-item..."> block from the plugin's fragment — see the
+// sample captured in AUDIT.md. `[\s\S]*?` because the title/meta sit a few
+// lines below the <img>, not on the same line.
+const RAIL_ITEM_RE =
+  /<a href="([^"]+)" data-ep="(\d+)" data-season="\d+"[^>]*>[\s\S]*?<img class="episode-thumb" src="([^"]*)"[\s\S]*?<p class="episode-title">([^<]*)<\/p>[\s\S]*?<p class="episode-meta">([^<]*)<\/p>/g;
+
+// The fragment's <img> is the smallest WordPress size crop (100x177) — fine
+// for the site's own admin list, blurry upscaled to our 224px poster cards.
+// The live homepage's own carousel uses the ORIGINAL (its <img> has no size
+// suffix, e.g. "..._EWEP.jpg" not "..._EWEP-100x177.jpg", confirmed
+// 2026-08-12); WordPress always keeps that unsized original alongside every
+// generated crop, so stripping the suffix recovers it losslessly.
+const SIZE_SUFFIX_RE = /-\d+x\d+(?=\.\w+$)/;
+
+function parseEpisodeRailHtml(html: string): RailEpisode[] {
+  return [...html.matchAll(RAIL_ITEM_RE)].map(([, href, epId, thumb, title, meta]) => ({
+    id: Number(epId),
+    href,
+    thumbnail: thumb.replace(SIZE_SUFFIX_RE, ""),
+    title: decodeEntities(title).trim(),
+    label: href.match(/\/(s\d+e\d+)\/?$/i)?.[1].toUpperCase().replace(/^S(\d+)E(\d+)$/, "S$1:E$2") ?? "",
+    // PHP templates indent the text around `Added:` with tabs/newlines. Collapse
+    // that formatting whitespace so the React row receives one clean sentence.
+    meta: decodeEntities(meta).replace(/\s+/g, " ").trim(),
+  }));
+}
+
+/** Newest-first by label, e.g. "S4:E26" before "S4:E1" before "S3:E26" —
+ *  descending numberTuple, the mirror of compareEpisodes' ascending one. */
+function compareRailEpisodesDesc(a: RailEpisode, b: RailEpisode): number {
+  const x = numberTuple(a.label);
+  const y = numberTuple(b.label);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const diff = (y[i] ?? -1) - (x[i] ?? -1);
+    if (diff !== 0) return diff;
+  }
+  return b.id - a.id;
+}
+
+/** The season INDEXES a show has, newest first — parsed from the same
+ *  fragment's `season_dropdown_html`, e.g. `data-season="3"` for Khmer
+ *  Insider's newest bucket. Not the same numbers as the "S4"/"S3" labels
+ *  printed on cards: the CMS's index buckets and the production's season
+ *  labels are assigned independently (index 2 holds BOTH the tail of S4 and
+ *  all of S3, confirmed 2026-08-12) — so index order is what reproduces the
+ *  live carousel's actual sequence, not label order. */
+function parseSeasonIndexes(dropdownHtml: string): number[] {
+  return [...dropdownHtml.matchAll(/data-season="(\d+)"/g)].map(m => Number(m[1])).sort((a, b) => b - a);
+}
+
+function fetchSeasonFragment(showId: number, season?: number) {
+  const q = season === undefined ? "" : `&season=${season}`;
+  return apiFetch<WpEpisodeRail>(`/wp/v2/khmer-insider-episode?show_id=${showId}${q}`, {
+    revalidate: 3600,
+    tags: ["episodes", `tv-show:${showId}`],
+  });
+}
+
+/** A show's ENTIRE episode history as a decorative rail, newest first — read
+ *  from the plugin's pre-rendered episode-list fragment: `GET
+ *  /wp/v2/khmer-insider-episode?show_id=<id>[&season=<idx>]`. Despite the
+ *  route's name this endpoint is generic — keyed by `show_id`, and the same
+ *  one every program's own live episode page calls (verified 2026-08-12:
+ *  Financial Street's page inlines the identical `restUrl` with
+ *  `showId:"88448"`).
+ *
+ *  This is a SEPARATE endpoint from fetchShowEpisodes' `tv-show-episodes`
+ *  list, which answers a styled 404 on this backend (see AUDIT.md's
+ *  corrections section) — this one works, but hands back an HTML fragment
+ *  instead of structured JSON, hence the regex parse instead of `env.data`.
+ *
+ *  One call with no `season` param returns only ONE bucket (the newest), not
+ *  the whole show — a first version of this function stopped there and came
+ *  up short of the live homepage's own Khmer Insider carousel, which showed
+ *  all 4 seasons/99 episodes in one scroll. So this fetches every bucket (the
+ *  first call also discovers how many there are, from its own
+ *  `season_dropdown_html`) — but the buckets themselves do NOT split along
+ *  season-label boundaries (checked 2026-08-12: Khmer Insider's index-2
+ *  bucket holds both S4's back half, E18-26, AND all of S3), so
+ *  concatenating bucket-by-bucket interleaves episodes out of order. Sorting
+ *  the combined pool by each card's own "S<n>:E<m>" label afterward (same
+ *  numberTuple ordering fetchShowEpisodes uses) is what actually produces a
+ *  clean newest-first sequence — not a replay of live's own raw post-date
+ *  order, which has its own well-documented quirks (see this file's header),
+ *  but a strictly cleaner one for the same 99-episode pool.
+ *
+ *  Cards link to the LIVE WordPress episode page rather than one of our own
+ *  /program/<slug>/<episode> routes: that route's existence check goes
+ *  through fetchShowEpisodes, so a constructed internal href would 404 every
+ *  one of these episodes rather than open them.
+ *
+ *  Returns [] on any failure — this is a homepage shelf beside a dozen
+ *  others, never the reason the page exists. */
+export async function fetchEpisodeRail(showId: number): Promise<{ episodes: RailEpisode[] }> {
+  try {
+    const first = await fetchSeasonFragment(showId);
+    const indexes = parseSeasonIndexes(first.season_dropdown_html ?? "");
+    const defaultIndex = first.query?.season;
+    const rest = await Promise.all(
+      indexes.filter(i => i !== defaultIndex).map(i => fetchSeasonFragment(showId, i).catch(() => null)),
+    );
+    const fragments = [first, ...rest].filter((f): f is WpEpisodeRail => f !== null);
+    const episodes = fragments.flatMap(f => parseEpisodeRailHtml(f.episode_list_html ?? ""));
+    return { episodes: episodes.sort(compareRailEpisodesDesc) };
+  } catch {
+    return { episodes: [] };
+  }
+}
+
+/** Resolve the real 16:9 Vimeo poster behind a legacy episode page.
+ *
+ * The fragment rail only exposes WordPress's portrait editorial thumbnail
+ * (340×600 for Khmer Insider), which is correct for the sidebar but badly
+ * cropped when stretched across the video stage. The public episode page still
+ * contains its Vimeo player id, and Vimeo oEmbed returns the video's own poster.
+ */
+export async function fetchEpisodeVideoCover(episodeHref: string): Promise<string> {
+  try {
+    const page = await fetch(episodeHref, { next: { revalidate: 3600, tags: ["episodes"] } });
+    if (!page.ok) return "";
+
+    const html = await page.text();
+    // The id appears both as a normal URL and JSON-escaped with `\/`.
+    const videoId = html.match(/player\.vimeo\.com(?:\\\/|\/)video(?:\\\/|\/)(\d+)/)?.[1];
+    if (!videoId) return "";
+
+    const oembed = await fetch(
+      `https://vimeo.com/api/oembed.json?url=${encodeURIComponent(`https://vimeo.com/${videoId}`)}&width=1280`,
+      { next: { revalidate: 86400, tags: ["episodes"] } },
+    );
+    if (!oembed.ok) return "";
+
+    const data = (await oembed.json()) as { thumbnail_url?: string };
+    return data.thumbnail_url ?? "";
+  } catch {
+    return "";
+  }
 }

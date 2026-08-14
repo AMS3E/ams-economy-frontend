@@ -22,6 +22,9 @@ import { getFeaturedPrograms, POSTER_COUNT } from "@/lib/navigation";
 import { kbPrasacFullLandscape } from "@/lib/promos";
 import { programHref, routedProgram } from "@/lib/programs";
 import { categoryRefs } from "@/lib/articles";
+import KhmerInsiderWatchPage from "@/components/program/KhmerInsiderWatchPage";
+import { getKhmerInsiderWatchData } from "@/lib/khmer-insider";
+import { notFound } from "next/navigation";
 
 type Params = { params: Promise<{ slug: string; episode: string }> };
 
@@ -45,12 +48,32 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
   const { slug, episode } = await params;
   if (!(await routedProgram(slug))) return {};
 
+  if (slug === "khmer-insider") {
+    const data = await getKhmerInsiderWatchData(episode);
+    if (!data.current) notFound();
+    return { title: `${data.current.label} — ${data.current.title}` };
+  }
+
   const page = await getEpisodePage(slug, episode);
   return { title: `${page.episode.episodeNumber} — ${page.showTitle}` };
 }
 
 export default async function EpisodePageRoute({ params }: Params) {
   const { slug, episode } = await params;
+
+  if (slug === "khmer-insider") {
+    const data = await getKhmerInsiderWatchData(episode);
+    if (!data.current) notFound();
+    return (
+      <KhmerInsiderWatchPage
+        program={data.program}
+        episode={data.episode}
+        episodes={data.episodes}
+        videoCover={data.videoCover}
+        currentEpisode={data.current}
+      />
+    );
+  }
 
   // Everything from DailyEventsSection down is the homepage's own furniture.
   // Live's episode page carries none of it — its <main> is a bare watch template

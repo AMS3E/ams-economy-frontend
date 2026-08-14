@@ -1,8 +1,12 @@
 import { css, cx } from "@/styled-system/css";
 import { container } from "@/components/layout/shared";
 import DailyEventsSection from "@/components/home/sections/DailyEventsSection";
+import SummaryNewsCarousel from "@/components/article/SummaryNewsCarousel";
 import type { LandingFeed } from "@/lib/landing-data";
-import { CardColumn, LeadAndRows } from "./blocks";
+import SectionHeader from "@/components/ui/SectionHeader";
+import ReviveAdSlot from "@/components/ads/revive/ReviveAdSlot";
+import { reviveFullLandscape } from "@/components/ads/revive/zones";
+import { LeadAndRows, Ranked, TagStrip, Thumbs } from "./blocks";
 import MatikaTabs from "./MatikaTabs";
 
 /**
@@ -27,7 +31,14 @@ export default function SectionHead({
 }) {
   return (
     <>
-      <DailyEventsSection cards={section.daily.cards} page={section.daily.page} totalPages={section.daily.totalPages} basePath={basePath} />
+      {section.updates ? (
+        <div className={cx(container, css({ marginTop: "18px" }))}>
+          <SectionHeader title={section.updates.heading} titleSize="24px" seeAllHref={section.updates.href} />
+          <TagStrip items={section.updates.items} sizes="(max-width: 768px) 50vw, 280px" />
+        </div>
+      ) : (
+        <DailyEventsSection cards={section.daily.cards} page={section.daily.page} totalPages={section.daily.totalPages} basePath={basePath} />
+      )}
 
       <div
         className={cx(
@@ -35,17 +46,33 @@ export default function SectionHead({
           css({
             marginTop: "44px",
             display: "grid",
-            gridTemplateColumns: { base: "1fr", lg: "460px 1fr" },
+            gridTemplateColumns: { base: "1fr", lg: "minmax(0,1fr) 460px" },
             gap: "30px",
-            alignItems: "start",
           }),
         )}
       >
-        {/* ព័ត៌មានពេញនិយម is a uniform stack of image-on-top cards; របាយការណ៍ថ្មីៗ
-            leads with a large card and then runs image-left rows. */}
-        <CardColumn block={section.topNews} sizes="(max-width: 1024px) 100vw, 460px" />
-        <LeadAndRows block={section.reports} sizes="(max-width: 1024px) 100vw, 620px" />
+        {/* របាយការណ៍ថ្មីៗ stays in the wide left column; ព័ត៌មានពេញនិយម is the
+            compact image-card stack on the right. `fillHeight` spreads reports'
+            few rows through the sidebar's taller height (topNews + popular)
+            instead of leaving a dead gap under a short left column. */}
+        <LeadAndRows block={section.reports} sizes="(max-width: 1024px) 100vw, 620px" fillHeight />
+        <div className={css({ display: "flex", flexDirection: "column", gap: "44px" })}>
+          <Thumbs block={section.topNews} meta />
+          <Ranked block={section.popular} />
+        </div>
       </div>
+
+      {section.summary.length > 0 && (
+        <>
+          <div className={cx(container, css({ marginTop: "44px" }))}>
+            <SectionHeader title="ព័ត៌មានសង្ខេប" titleSize="20px" seeAllText="ប្រភេទវីដេអូ (VIDEO)" />
+            <SummaryNewsCarousel items={section.summary} />
+          </div>
+          <div className={cx(container, css({ marginTop: "44px" }))}>
+            <ReviveAdSlot zone={reviveFullLandscape} />
+          </div>
+        </>
+      )}
 
       <div className={cx(container, css({ marginTop: "44px" }))}>
         <MatikaTabs heading={matika.heading} tabs={matika.tabs} />

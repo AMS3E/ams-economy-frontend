@@ -5,8 +5,9 @@ import PosterCarousel from "@/components/home/PosterCarousel";
 import type { ArticleExtras } from "@/lib/articles";
 import { programHref } from "@/lib/programs";
 import SectionHeader from "../ui/SectionHeader";
-import AdEmbed from "../ui/AdEmbed";
-import { kbPrasacHalfLandscape } from "@/lib/promos";
+import ReviveAdSlot from "@/components/ads/revive/ReviveAdSlot";
+import { reviveHalfLandscape } from "@/components/ads/revive/zones";
+import SummaryNewsCarousel from "./SummaryNewsCarousel";
 
 /** One side of the prev/next pager. `align` flips the text for the "next" side. */
 function PagerCard({ post, label, align }: { post: { slug: string; title: string; meta: string }; label: string; align: "left" | "right" }) {
@@ -41,7 +42,7 @@ export default function BelowArticle({ extras }: { extras: ArticleExtras }) {
           `section-movies-carousel`), not a grid. The one slot on the site that
           shows every program (live: 20); it used to be capped at 4. */}
       <div className={css({ marginTop: "44px" })}>
-        <SectionHeader title="កម្មវិធីពិសេសរបស់ AMS INFOTAINMENT" titleSize="20px" />
+        <SectionHeader title="កម្មវិធីពិសេសរបស់ AMS ECONOMY" titleSize="20px" />
         <PosterCarousel
           posters={extras.programs.map((p) => ({
             src: p.image,
@@ -54,22 +55,12 @@ export default function BelowArticle({ extras }: { extras: ArticleExtras }) {
 
       {/* Video news */}
       <div className={css({ marginTop: "40px" })}>
-        <SectionHeader title={extras.videos.heading} titleSize="20px" />
-        <div
-          className={css({
-            display: "grid",
-            gridTemplateColumns: { base: "repeat(2,1fr)", md: "repeat(4,1fr)" },
-            gap: "18px",
-          })}
-        >
-          {extras.videos.items.map((item) => (
-            <ArticleCard key={item.slug} item={item} sizes="(max-width: 768px) 50vw, 260px" />
-          ))}
-        </div>
+        <SectionHeader title={extras.videos.heading} titleSize="20px" seeAllText="ប្រភេទវីដេអូ (VIDEO)" />
+        <SummaryNewsCarousel items={extras.videos.items} />
       </div>
 
       <div className={css({ margin: "30px 0px" })}>
-        <AdEmbed promo={kbPrasacHalfLandscape} />
+        <ReviveAdSlot zone={reviveHalfLandscape} />
       </div>
 
       {/* Previous / Next article pager */}
@@ -88,7 +79,7 @@ export default function BelowArticle({ extras }: { extras: ArticleExtras }) {
 
       {/* Other news */}
       <div className={css({ marginTop: "40px" })}>
-        <SectionHeader title={extras.otherNews.heading} seeAllHref="/category/all-news" />
+        <SectionHeader title={extras.otherNews.heading} seeAllHref="/category/all-news" seeAllText="View all" />
         <div
           className={css({
             display: "grid",
@@ -97,7 +88,7 @@ export default function BelowArticle({ extras }: { extras: ArticleExtras }) {
           })}
         >
           {extras.otherNews.items.map((item) => (
-            <ArticleCard key={item.slug} item={item} sizes="(max-width: 768px) 100vw, 400px" />
+            <ArticleCard key={item.slug} item={item} sizes="(max-width: 768px) 100vw, 400px" withCategories />
           ))}
         </div>
       </div>

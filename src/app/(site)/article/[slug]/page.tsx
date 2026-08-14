@@ -11,8 +11,8 @@ import { container } from "@/components/layout/shared";
 import { getArticle, getArticleExtras, getRecentArticleSlugs, type Article } from "@/lib/articles";
 import { getCommentCount } from "@/lib/comments";
 import ShareRow from "@/components/article/ArticleShareSection";
-import AdEmbed from "@/components/ui/AdEmbed";
-import { kbPrasacHalfLandscape } from "@/lib/promos";
+import ReviveAdSlot from "@/components/ads/revive/ReviveAdSlot";
+import { reviveHalfLandscape } from "@/components/ads/revive/zones";
 import { SITE_LOGO, SITE_NAME, SITE_URL } from "@/lib/site";
 
 type Params = { params: Promise<{ slug: string }> };
@@ -252,15 +252,20 @@ export default async function ArticlePage({ params }: Params) {
               Note the meta line above links to #comments, which nothing
               renders while this is off. */}
           <div className={css({ marginTop: "30px", marginBottom: "30px" })}>
-            <AdEmbed promo={kbPrasacHalfLandscape} />
+            <ReviveAdSlot zone={reviveHalfLandscape} />
           </div>
-          <RelatedColumns recentReports={extras.recentReports} entertainment={extras.entertainment} />
-          <BelowArticle extras={extras} />
+          <RelatedColumns recentReports={extras.recentReports} generalNews={extras.generalNews} />
         </article>
 
         {/* sidebar */}
-        <Sidebar popular={extras.popular} sidebarLists={extras.sidebarLists} emptyWidget={extras.emptyWidget} />
+        <Sidebar sidebarLists={extras.sidebarLists} />
       </div>
+
+      {/* These rails belong below the article/sidebar pair and use the full
+          content width. Keeping them inside <article> squeezed every four-up
+          carousel into the main grid column, which made the cards and images
+          substantially smaller than the live layout. */}
+      <BelowArticle extras={extras} />
     </div>
   );
 }

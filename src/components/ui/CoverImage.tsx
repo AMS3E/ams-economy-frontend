@@ -9,6 +9,11 @@ type Props = {
   alt?: string;
   sizes?: string;
   priority?: boolean;
+  /** Skips next/image's optimizer, serving `src` as-is (no `/_next/image`
+   *  proxy, no resize). For sources already served pre-sized — WordPress's
+   *  own thumbnail crops, e.g. the episode rail's 100x177 exports — the
+   *  optimizer only adds a hop with nothing to shrink. */
+  unoptimized?: boolean;
 };
 
 // Shared geometry: both layers fill the (positioned) parent, exactly as
@@ -47,6 +52,7 @@ export default function CoverImage({
   alt = "",
   sizes = "(max-width: 768px) 50vw, 25vw",
   priority = false,
+  unoptimized = false,
 }: Props) {
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -64,6 +70,7 @@ export default function CoverImage({
         fill
         sizes={sizes}
         priority={priority}
+        unoptimized={unoptimized}
         onLoad={() => setLoaded(true)}
         onError={() => setFailed(true)}
         className={photo}

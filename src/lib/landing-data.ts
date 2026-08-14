@@ -8,10 +8,9 @@ import { apiFetch } from "./api/client";
 import { mapProgram } from "./api/mappers";
 import { categoryRefs, categoryRefsByIds, type ArticleRef, type PopularItem } from "./articles";
 import { getTeam, type TeamMember } from "./authors";
-import { categoryHref, getCategoryTerms, landingHref, type Landing } from "./categories";
+import { categoryHref, getCategoryTerms, NAV_SECTIONS, type Landing } from "./categories";
 import { fetchEpisodeCards } from "./episodes";
 import { type FeaturedProgram as TrailerProgram } from "./featured-program";
-import { getFeaturedPrograms, POSTER_COUNT, type FeaturedProgram } from "./navigation";
 import { programBySlug, programHref } from "./programs";
 import { fetchCardPage, type CardPage } from "./home-data";
 
@@ -69,41 +68,19 @@ const TAIL = {
   /** Big cards, two to a row. A section page runs a 2x2 of them; a topic page,
    *  whose right column is shorter, shows only the first row. Fetched once at the
    *  longer size and sliced. */
-  // MATCHES LIVE, mislabelled the same way as lifeTips below: the heading and the
-  // "see all" say all-news, but live fills this from life-tips (956) — verified as
-  // exactly the newest four of that feed. `slug` keeps the link on all-news, as
-  // live's does. Delete `ids` to go back to a genuine all-news mix.
-  interest: { heading: "ចំណាប់អារម្មណ៍របស់ប្រិយមិត្ត", slug: "all-news", ids: "956", size: 4 },
-  // MATCHES LIVE, and live is mislabelled: the heading and the "see all" say
-  // បំណិនជីវិត / life-tips, but the block is filled from entertainment-strange-news
-  // (963) — the same feed the ព័ត៌មានប្លែកៗ block below it already runs, so live
-  // shows strange news twice and life-tips nowhere. Kept deliberately, to match
-  // the live page first; `slug` still points the "see all" at life-tips, as live's
-  // does. Switch back by deleting `ids`.
-  lifeTips: { heading: "បំណិនជីវិត", slug: "life-style-life-tips-news", ids: "963", size: 4 },
-  skincare: { heading: "គន្លឹះថែរក្សាសម្ផស្ស", slug: "life-style-health-and-beauty-news", size: 7 },
-  love: { heading: "ស្នេហានិងទំនាក់ទំនង", slug: "life-style-love-and-relation-news", size: 3 },
-  travel: { heading: "ទេសចរណ៍", slug: "life-style-travel-news", size: 3 },
-  movies: { heading: "ភាពយន្ត", slug: "entertainment-movie-and-music-news", size: 7 },
-  strange: { heading: "ព័ត៌មានប្លែកៗ", slug: "entertainment-strange-news", size: 5 },
-  entertainment: { heading: "អត្ថបទកម្សាន្ត", slug: "entertainment-news", size: 3 },
+  // Editorially curated from category 243; `slug` supplies the all-news link.
+  interest: { heading: "ចំណាប់អារម្មណ៍របស់ប្រិយមិត្ត", slug: "all-news", ids: "243", size: 4 },
   /** Both pages carry this block, at different lengths: a topic page runs all 7
    *  in its head, beside its own feed; a section page shows the first 5, further
    *  down in the tail. Fetched once at the longer size and sliced. */
   // Also life-tips on live (the newest five, which is what a section page shows
   // of this block) — so live runs the same 956 feed in this block AND in
   // `interest` above, four of the five articles being the same ones.
-  popular: { heading: "ប្រធានបទពេញនិយម", slug: "all-news", ids: "956", size: 7 },
-  /** Section pages only.
-   *
-   *  NOT matched to live, and cannot be with this API. Live fills it from
-   *  life-tips (956) too, but ordered by POPULARITY, not date — its six articles
-   *  are from 2023-2025 and none are recent. `get-articles` registers only
-   *  page_no / page_size / category_id / date_filter (see docs/ams3e-api-functions),
-   *  so there is no way to ask for it. Matching would need an `orderby` on the
-   *  plugin side; until then this stays a recent all-news mix. */
-  topNews: { heading: "ព័ត៌មានពេញនិយម", slug: "all-news", size: 6 },
-  reports: { heading: "របាយការណ៍ថ្មីៗ", slug: "reports", size: 10 },
+  popular: { heading: "ប្រធានបទពេញនិយម", slug: "all-news", ids: "243", size: 7 },
+  /** Section pages only. The heading still links to all news, while its article
+   *  feed is curated through category 515. */
+  topNews: { heading: "អត្ថបទថ្មីៗ", slug: "all-news", ids: "", size: 10 },
+  reports: { heading: "ព័ត៌មានថ្មីបំផុត", slug: "reports", ids: "243", size: 4 },
 } satisfies Record<string, TailBlock>;
 
 /** A tail block's articles, by ID when the entry names them and by slug otherwise. */
@@ -121,6 +98,12 @@ const RECENT = { heading: "អត្ថបទថ្មីៗ", size: 10 } as con
 
 /** The bare four-card strip at the top of a topic page (TagStrip). */
 const LEAD = { heading: "ព្រឹត្តិការណ៍ប្រចាំថ្ងៃ", size: 4 } as const;
+
+/** ព័ត៌មានសង្ខេប — a four-up carousel below the matika tabs, section pages
+ *  only. Live runs this as VIDEO posts; we have no video endpoint (same
+ *  limitation the article page's own ព័ត៌មានសង្ខេប carries — see AUDIT.md
+ *  TIER 3), so it's a recent-articles stand-in until one exists. */
+const SUMMARY = { heading: "ព័ត៌មានសង្ខេប", seeAllText: "ប្រភេទវីដេអូ (VIDEO)", slug: "all-news", size: 8 } as const;
 
 /**
  * Each topic's បទយកការណ៍ term, keyed by the ព្រឹត្តិការណ៍ term its landing page
@@ -151,32 +134,26 @@ const TOPIC_REPORTS: Record<string, number> = {
   "life-style-travel-news": 986, // life-style-travel-reports
 };
 
-/**
- * មាតិការសនិយម — a four-TAB widget, not a row with four links beside it.
- *
- * WordPress renders `ul#tabs-nav` plus four panels of four articles, switching
- * in place. We rendered one topic's four articles and turned the other three
- * tabs into links that NAVIGATE AWAY to those topics' landing pages, so 12 of
- * the 16 articles were never fetched at all. (The comment that used to live here
- * claimed the live tabs were dead links to `/home/#`. They are not — they are
- * working jQuery tabs. See AUDIT.md → CORRECTIONS.)
- *
- * The labels are the terms' own names, so they are read off the API rather than
- * written out here.
- */
+/** Economy's latest-articles tab rail. The same six categories drive the main
+ * navigation and the homepage version of this component. Labels still come
+ * from WordPress; their public landing URLs are the pinned NAV_SECTIONS hrefs. */
 const MATIKA = {
-  heading: "មាតិការសនិយម",
+  heading: "អត្ថបទថ្មីៗដែលលោកអ្នកគួរយល់ដឹង",
   size: 4,
-  slugs: [
-    "life-style-love-and-relation-news",
-    "life-style-health-and-beauty-news",
-    "life-style-travel-news",
-    "life-style-life-tips-news",
-  ],
 } as const;
 
-/** One panel of the មាតិការសនិយម widget: a topic, and the four articles behind
- *  its tab. */
+/** Sections that follow Economy's section-head layout while sourcing their
+ * blocks from explicitly curated category IDs. `latestId` intentionally feeds
+ * both ព័ត៌មានថ្មីបំផុត and អត្ថបទថ្មីៗ. */
+const CURATED_SECTION_HEADS: Record<string, { updatesId: number; latestId: number }> = {
+  "news-finance": { updatesId: 577, latestId: 247 },
+  "news-realestate": { updatesId: 579, latestId: 249 },
+  "news-business": { updatesId: 571, latestId: 251 },
+  "news-pr": { updatesId: 581, latestId: 257 },
+  "news-startup-and-innovation": { updatesId: 583, latestId: 253 },
+};
+
+/** One panel of the latest-articles widget: a section and its four articles. */
 export interface MatikaTab {
   label: string;
   /** The topic's landing page — where "see all" for this tab goes. */
@@ -190,27 +167,19 @@ export interface LandingFeed {
    *  widget — the SAME paged section the homepage runs, walking this section's
    *  own articles instead of the news root. It used to be three day tabs; see
    *  home/sections/DailyEventsSection for why the days went. */
-  section: { daily: CardPage; topNews: Block; reports: Block } | null;
+  section: { daily: CardPage; updates: Block | null; topNews: Block; reports: Block; popular: RankedBlock; summary: ArticleRef[] } | null;
   /** Topic-page head; null on a section page. `lead` is the four-card strip at the
    *  top of the page — topic pages do NOT carry the ព្រឹត្តិការណ៍ប្រចាំថ្ងៃ
    *  daily-events widget the home and section pages do. `latest` is the next
    *  window of the topic's own feed. */
   topic: { lead: Block; latest: Block; recent: Block; popular: RankedBlock } | null;
   tail: {
-    programs: FeaturedProgram[];
     /** ចង់ដឹងរឿងគេ and បើកសោជីវិត — each a banner plus its episode rail. */
     features: ProgramFeature[];
     team: TeamMember[];
     /** Section pages only — on a topic page this block lives in the head. */
     popular: RankedBlock | null;
     interest: Block;
-    lifeTips: Block;
-    skincare: RankedBlock;
-    love: Block;
-    travel: Block;
-    movies: RankedBlock;
-    strange: Block;
-    entertainment: Block;
   };
 }
 
@@ -297,6 +266,7 @@ export async function getLandingFeed(landing: Landing, newsPage = 1): Promise<La
   // Term slug -> its listing URL, for every "see all" on the page.
   const terms = await getCategoryTerms();
   const bySlug = new Map(terms.map((t) => [t.slug, t]));
+  const byId = new Map(terms.map((t) => [t.id, t]));
   const listing = (slug: string) => {
     const t = bySlug.get(slug);
     return t ? categoryHref(t.path) : categoryHref(slug);
@@ -311,11 +281,20 @@ export async function getLandingFeed(landing: Landing, newsPage = 1): Promise<La
     href: listing(TAIL[key].slug),
     items: ranked(items),
   });
+  const economySection = NAV_SECTIONS.find((entry) => entry.news === term.slug);
+  const curatedHead = CURATED_SECTION_HEADS[term.slug];
+  const updatesTerm = curatedHead
+    ? byId.get(curatedHead.updatesId) ?? (economySection ? bySlug.get(economySection.reports) : undefined)
+    : economySection
+      ? bySlug.get(economySection.reports)
+      : undefined;
+  const latestTerm = curatedHead ? byId.get(curatedHead.latestId) ?? term : undefined;
+  const recentTerm = latestTerm;
 
   const [
-    daily, own, leadReports, matika, topNews, reports, recent, popular,
-    programs, features, team,
-    interest, lifeTips, skincare, love, travel, movies, strange, entertainment,
+    daily, updates, own, leadReports, matika, topNews, reports, recent, popular, summary,
+    features, team,
+    interest,
   ] = await Promise.all([
     // The blocks scoped to the term you're on. A section leads with a large card
     // plus a 2x2 cluster (5). A topic leads with a strip of four and then runs
@@ -335,6 +314,11 @@ export async function getLandingFeed(landing: Landing, newsPage = 1): Promise<La
           tags: ["articles", `category:${term.slug}`],
         }).catch(() => EMPTY_CARD_PAGE)
       : Promise.resolve<CardPage>(EMPTY_CARD_PAGE),
+    term.slug === "news-economic" && economySection
+      ? categoryRefs(economySection.reports, 4)
+      : curatedHead
+        ? categoryRefsByIds(String(curatedHead.updatesId), 4)
+        : Promise.resolve<ArticleRef[]>([]),
     // The topic's own feed, for ព័ត៌មានថ្មីបំផុត. Was fetched at 9 and split with
     // the lead strip above it; the strip now runs a different term, so this is
     // just its own five.
@@ -344,29 +328,30 @@ export async function getLandingFeed(landing: Landing, newsPage = 1): Promise<La
     !isSection && TOPIC_REPORTS[term.slug]
       ? categoryRefsByIds(String(TOPIC_REPORTS[term.slug]), LEAD.size)
       : Promise.resolve<ArticleRef[]>([]),
-    // All four tabs, not just the one we used to show.
-    Promise.all(MATIKA.slugs.map((slug) => categoryRefs(slug, MATIKA.size))),
-    isSection ? tailRefs(TAIL.topNews) : [],
-    isSection ? tailRefs(TAIL.reports) : [],
+    // All six Economy navigation sections, four recent articles per tab.
+    Promise.all(NAV_SECTIONS.map((entry) => categoryRefs(entry.news, MATIKA.size))),
+    isSection
+      ? curatedHead
+        ? categoryRefsByIds(String(curatedHead.latestId), TAIL.topNews.size)
+        : tailRefs(TAIL.topNews)
+      : [],
+    isSection
+      ? curatedHead
+        ? categoryRefsByIds(String(curatedHead.latestId), TAIL.reports.size)
+        : tailRefs(TAIL.reports)
+      : [],
     // The topic's OWN recents — the block that used to duplicate the ranked list.
     isSection ? [] : categoryRefs(term.slug, RECENT.size),
     tailRefs(TAIL.popular),
-    getFeaturedPrograms(POSTER_COUNT.landingBand),
+    isSection ? categoryRefs(SUMMARY.slug, SUMMARY.size) : Promise.resolve<ArticleRef[]>([]),
     Promise.all(FEATURES.map(getFeature)).then((f) => f.filter((x) => x !== null)),
     getTeam(),
     tailRefs(TAIL.interest),
-    tailRefs(TAIL.lifeTips),
-    tailRefs(TAIL.skincare),
-    tailRefs(TAIL.love),
-    tailRefs(TAIL.travel),
-    tailRefs(TAIL.movies),
-    tailRefs(TAIL.strange),
-    tailRefs(TAIL.entertainment),
   ]);
 
   // A topic page runs all 7; a section page shows the first 5. See TAIL.popular.
   const popularBlock = rank("popular", popular);
-  const popularShort = { ...popularBlock, items: popularBlock.items.slice(0, 5) };
+  const popularShort = { ...popularBlock, items: popularBlock.items.slice(0, 7) };
 
   // A section page runs a 2x2; a topic page, one row. See TAIL.interest.
   const interestBlock = block("interest", interest);
@@ -377,17 +362,42 @@ export async function getLandingFeed(landing: Landing, newsPage = 1): Promise<La
   return {
     matika: {
       heading: MATIKA.heading,
-      tabs: MATIKA.slugs.map((slug, i) => {
-        const t = bySlug.get(slug);
+      tabs: NAV_SECTIONS.map((entry, i) => {
+        const t = bySlug.get(entry.news);
         return {
-          label: t?.name ?? slug,
-          href: t ? landingHref(t.path) : categoryHref(slug),
+          label: t?.name ?? entry.news,
+          href: entry.href,
           items: matika[i],
         };
       }),
     },
     section: isSection
-      ? { daily, topNews: block("topNews", topNews), reports: block("reports", reports) }
+      ? {
+          daily,
+          updates: updatesTerm
+            ? {
+                heading: "របាយការណ៍ និងបច្ចុប្បន្នភាព",
+                href: categoryHref(updatesTerm.path),
+                items: updates,
+              }
+            : null,
+          topNews: recentTerm
+            ? {
+                heading: TAIL.topNews.heading,
+                href: categoryHref(recentTerm.path),
+                items: topNews,
+              }
+            : block("topNews", topNews),
+          reports: latestTerm
+            ? {
+                heading: TAIL.reports.heading,
+                href: categoryHref(latestTerm.path),
+                items: reports,
+              }
+            : block("reports", reports),
+          popular: popularShort,
+          summary,
+        }
       : null,
     topic: isSection
       ? null
@@ -401,18 +411,10 @@ export async function getLandingFeed(landing: Landing, newsPage = 1): Promise<La
           popular: popularBlock,
         },
     tail: {
-      programs,
       features,
       team,
-      popular: isSection ? popularShort : null,
+      popular: null,
       interest: isSection ? interestBlock : interestRow,
-      lifeTips: block("lifeTips", lifeTips),
-      skincare: rank("skincare", skincare),
-      love: block("love", love),
-      travel: block("travel", travel),
-      movies: rank("movies", movies),
-      strange: block("strange", strange),
-      entertainment: block("entertainment", entertainment),
     },
   };
 }

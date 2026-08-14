@@ -6,19 +6,19 @@ import { container } from "./shared";
 import SocialIcon from "@/components/ui/SocialIcon";
 
 const linkStyle = css({
-  color: "#9a9ba3",
+  color: "#949cb0",
   fontSize: "15px",
   textDecoration: "none",
   transition: "color .2s",
-  _hover: { color: "#fff" },
+  _hover: { color: "#19272e" },
 });
 
 const legalStyle = css({
-  color: "#9a9ba3",
+  color: "#a6a6a6",
   fontSize: "13px",
   textDecoration: "none",
   transition: "color .2s",
-  _hover: { color: "#fff" },
+  _hover: { color: "#19272e" },
 });
 
 /** An internal link goes through <Link> for client-side navigation; an AMS
@@ -40,10 +40,10 @@ export default function SiteFooter() {
   return (
     <footer
       className={css({
-        background: "#0a0d14",
+        background: "#eeeff0",
         width: "100%",
         padding: "40px 0 0px",
-        borderTop: "1px solid rgba(255,255,255,.05)",
+        borderTop: "1px solid #cdcdcd",
       })}
     >
       <div className={container}>
@@ -55,13 +55,21 @@ export default function SiteFooter() {
             flexWrap: "wrap",
             gap: "18px",
             paddingBottom: "28px",
-            borderBottom: "1px solid rgba(255,255,255,.07)",
+            borderBottom: "1px solid #cdcdcd",
           })}
         >
-          {/* Footer logo (white SVG, sits on the dark footer background). Served
-              from public/ — see public/assets/Logo-Footer.svg. Intrinsic size is
-              142×46; width/height attrs reserve space to avoid layout shift. */}
-          <img src="/assets/Logo-Footer.svg" alt="Apsara Media Services" width={181} height={58} className={css({ height: "60px", width: "auto", display: "block" })} />
+          {/* Full-colour logo — live's own light footer (site__footer--v1.light,
+              #eeeff0 background) uses the colour mark, not the white one; a white
+              SVG would be invisible here. Same CDN-hosted-SVG convention as the
+              header's own logo (SiteHeader.tsx). Intrinsic size 181×58;
+              width/height attrs reserve space to avoid layout shift. */}
+          <img
+            src="https://s3.ams.com.kh/economy/2022/09/APSARA-MEDIA-SERVICES-COLOUR-FULL-H58.svg"
+            alt="Apsara Media Services"
+            width={181}
+            height={58}
+            className={css({ height: "60px", width: "auto", display: "block" })}
+          />
           <div className={css({ display: "flex", flexWrap: "wrap", gap: "22px" })}>
             {/* These were <span cursor:pointer> — they looked clickable and were
                 not. They are the real AMS accounts now. */}
@@ -75,15 +83,14 @@ export default function SiteFooter() {
                   display: "flex",
                   alignItems: "center",
                   gap: "8px",
-                  color: "#9a9ba3",
+                  color: "#949cb0",
                   fontSize: "16px",
                   textDecoration: "none",
                   transition: "color .2s",
-                  _hover: { color: "#fff" },
+                  _hover: { color: "#19272e" },
                 })}
               >
-                {/* White brand glyph (no badge), sized via font-size. */}
-                <span className={css({ display: "inline-flex", color: "#fff", fontSize: "16px" })}>
+                <span className={css({ display: "inline-flex", color: "#19272e", fontSize: "16px" })}>
                   <SocialIcon name={s.name} />
                 </span>
                 {s.name}
@@ -106,7 +113,7 @@ export default function SiteFooter() {
             const groups = [col.links.slice(0, half), col.links.slice(half)];
             return (
               <div key={col.heading}>
-                <div className={css({ color: "#fff", fontSize: "18px", fontWeight: 600, marginBottom: "25px" })}>{col.heading}</div>
+                <div className={css({ color: "#19272e", fontSize: "18px", fontWeight: 600, marginBottom: "25px" })}>{col.heading}</div>
                 <div
                   className={css({
                     display: "grid",
@@ -129,8 +136,8 @@ export default function SiteFooter() {
 
           {/* Newsletter CTA column */}
           <div>
-            <div className={css({ color: "#fff", fontSize: "18px", fontWeight: 700, marginBottom: "25px", lineHeight: 1.5 })}>{newsletter.heading}</div>
-            <div className={css({ color: "#9a9ba3", fontSize: "15px", fontWeight: 500, marginBottom: "25px", lineHeight: 1.5 })}>
+            <div className={css({ color: "#19272e", fontSize: "18px", fontWeight: 700, marginBottom: "25px", lineHeight: 1.5 })}>{newsletter.heading}</div>
+            <div className={css({ color: "#949cb0", fontSize: "15px", fontWeight: 500, marginBottom: "25px", lineHeight: 1.5 })}>
               សូមចុចប៊ូតុងខាងក្រោមដើម្បីទទួលបានព័ត៌មានថ្មីបំផុត!
             </div>
             {/* A button, not an <a href="#">: there is nothing to sign up to yet
@@ -159,9 +166,11 @@ export default function SiteFooter() {
           </div>
         </div>
       </div>
-      {/* Full-bleed black bar: the background sits on the outer element so it
-          spans the viewport, and `container` constrains the content inside it. */}
-      <div className={css({ background: "black" })}>
+      {/* Full-bleed bar: the background sits on the outer element so it spans
+          the viewport, and `container` constrains the content inside it. White,
+          not black — live's light footer (site__footer--v1.light) overrides
+          .footer-bottom-bar's own dark default to #fff. */}
+      <div className={css({ background: "#fff" })}>
         <div
           className={cx(
             container,
@@ -175,7 +184,7 @@ export default function SiteFooter() {
             }),
           )}
         >
-          <div className={css({ color: "#6b6c75", fontSize: "13px" })}>
+          <div className={css({ color: "#a6a6a6", fontSize: "13px" })}>
             ឆ្នាំ2020 - 2024 © រក្សាសិទ្ធិគ្រប់យ៉ាងដោយ៖ អគ្គនាយកដ្ឋានវិទ្យុ និងទូរទស្សន៍អប្សរា | អភិវឌ្ឍដោយ Apsara Media Services
           </div>
           <div className={css({ display: "flex", gap: "20px", flexWrap: "wrap" })}>
