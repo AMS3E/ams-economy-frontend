@@ -2,11 +2,8 @@ import Link from "next/link";
 import { css } from "@/styled-system/css";
 import type { ProgramIcon } from "@/lib/navigation";
 
-// A Server Component: the icons link out to econome.kh directly (see
-// navigation.ts), never to our own /program/<slug>, so there is no "current
-// page" to highlight and no reason to read the pathname client-side. Live's
-// `.site_header__secondary-nav-v3` never mutes/grayscales these either — full
-// color at rest is the real behavior, not just a hover reveal.
+// A Server Component: every item is a published WordPress Program and links to
+// its internal /program/<slug> page. There is no client-side state in the row.
 
 // `.site_header__secondary-nav-v3 .nav > li > a` at desktop width (≥1440px
 // in the live CSS's own breakpoints) — the row's real height comes from this

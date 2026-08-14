@@ -131,7 +131,7 @@ const heroBanners: HeroBanner[] = [
     title: ["ធ្វើជាមនុស្សឱ្យតែចេះធ្វើរឿង ៤", "យ៉ាងនេះមិនខ្វះទេ"],
     cta: {
       label: "ចុចអានបន្ត",
-      href: "https://infotainment.ams.com.kh/category/life-tips/reports/4-ways-making-everyone-around-us-want-to-make-friend-with/",
+      href: "https://economy.ams.com.kh/category/life-tips/reports/4-ways-making-everyone-around-us-want-to-make-friend-with/",
     },
     author: {
       prefix: "អត្ថបទដែលបានសរសេរដោយ",

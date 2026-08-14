@@ -34,11 +34,11 @@ COPY . .
 #
 # NEXT_PUBLIC_* are inlined into the client bundle by `next build`, so they must
 # be correct HERE; setting them only in Dokploy's runtime env does nothing.
-ARG NEXT_PUBLIC_SITE_URL=https://infotainment.ams.com.kh
-ARG NEXT_PUBLIC_WP_ORIGIN=https://infotainment.ams.com.kh
+ARG NEXT_PUBLIC_SITE_URL=https://info.amscloud.cc
+ARG NEXT_PUBLIC_WP_ORIGIN=https://economy.ams.com.kh
 # Server-only, but the build's prerender pass reads it too (every ISR page is
 # rendered at build time against the live WordPress).
-ARG API_BASE_URL=https://infotainment.ams.com.kh/wp-json
+ARG API_BASE_URL=https://economy.ams.com.kh/wp-json
 
 ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL \
     NEXT_PUBLIC_WP_ORIGIN=$NEXT_PUBLIC_WP_ORIGIN \

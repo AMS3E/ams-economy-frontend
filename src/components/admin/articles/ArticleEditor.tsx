@@ -139,7 +139,7 @@ export default function ArticleEditor({
     ? undefined
     : post.status === "publish" && post.slug
       ? `/article/${post.slug}`
-      : `${process.env.NEXT_PUBLIC_WP_ORIGIN ?? "https://infotainment.ams.com.kh"}/?p=${post.id}&preview=true`;
+      : `${process.env.NEXT_PUBLIC_WP_ORIGIN ?? "https://economy.ams.com.kh"}/?p=${post.id}&preview=true`;
 
   // Group the flat, depth-ordered tree into top-level branches for the columns.
   const groups: CategoryNode[][] = [];

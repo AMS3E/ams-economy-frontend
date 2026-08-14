@@ -54,12 +54,14 @@ const aboutSchedule = css({ margin: 0, fontSize: "12px", lineHeight: 2.2, color:
 const aboutText = css({ gridArea: "text", minWidth: 0, margin: 0, fontSize: "12px", lineHeight: 1.85, color: "text", textAlign: "justify" });
 
 export default function KhmerInsiderWatchPage({
+  programSlug,
   program,
   episode,
   episodes,
   videoCover,
   currentEpisode,
 }: {
+  programSlug: string;
   program: Program;
   episode: EpisodePreview | null;
   episodes: RailEpisode[];
@@ -69,7 +71,7 @@ export default function KhmerInsiderWatchPage({
   const description = episode?.description.length ? episode.description : program.description;
   const current = currentEpisode ?? episodes[0];
   const currentSlug = current?.href.split("/").filter(Boolean).at(-1);
-  const currentHref = currentSlug ? `/program/khmer-insider/${currentSlug}` : "/program/khmer-insider";
+  const currentHref = currentSlug ? `/program/${programSlug}/${currentSlug}` : `/program/${programSlug}`;
   const title = episode
     ? [episode.showTitle, episode.episodeNumber, episode.title].filter(Boolean).join(" - ")
     : current?.title || program.title;
@@ -117,6 +119,7 @@ export default function KhmerInsiderWatchPage({
         </div>
 
         <KhmerInsiderSidebar
+          programSlug={programSlug}
           episodes={episodes}
           title={program.title}
           schedule={program.schedule}

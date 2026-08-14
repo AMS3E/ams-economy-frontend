@@ -17,7 +17,7 @@ import { CURATED_PROGRAMS } from "@/lib/program-curation";
 import { programHref } from "@/lib/programs";
 
 /** WordPress origin that serves the embeds and owns these permalinks. */
-export const WP_ORIGIN = process.env.NEXT_PUBLIC_WP_ORIGIN ?? "https://infotainment.ams.com.kh";
+export const WP_ORIGIN = process.env.NEXT_PUBLIC_WP_ORIGIN ?? "https://economy.ams.com.kh";
 
 const stripSlash = (p: string) => p.replace(/\/+$/, "") || "/";
 

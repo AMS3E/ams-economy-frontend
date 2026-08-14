@@ -1,10 +1,10 @@
 // Header navigation + program data.
 //
 // This is REAL data pulled from the live WordPress site (labels, links, and
-// CDN image URLs), shaped like a future CMS/API response. The pills and the
-// icon strip stay curated constants (their gradients/icons are design assets,
-// not CMS data); the poster list is curated too but auto-appends new published
-// programs on the all-programs surfaces — see getFeaturedPrograms.
+// CDN image URLs), shaped like a future CMS/API response. The pills stay
+// curated because their colors are design assets; the icon strip comes from
+// published Program posts; the poster list is curated but auto-appends new
+// published programs on the all-programs surfaces — see getFeaturedPrograms.
 //
 // NO top-level import of the data layer here: MobileNav (a Client Component)
 // value-imports PROGRAM_ICON_LABEL from this module, so a static import of
@@ -61,145 +61,45 @@ export interface ProgramIcon {
   title: string;
   image: string;
   slug: string;
-  /** Where the icon links. The live-fetched path (toProgramIcon below) uses
-   *  the menu item's own economy.ams.com.kh URL directly — see ProgramIconStrip's
-   *  header comment for why: these point at the live site, not /program/<slug>.
-   *  The hardcoded fallback below now carries the same real economy.ams.com.kh
-   *  URLs, transcribed off live rather than guessed. */
+  /** Internal page for the WordPress Program post. */
   href: string;
 }
 
 /** Label that introduces the icon strip ("Digital content:"). */
 export const PROGRAM_ICON_LABEL = "មាតិកាឌីជីថល:";
 
-// Transcribed from economy.ams.com.kh's live `#menu-secondary-nav-v3-menu`
-// (2026-08-12) — titles and image URLs byte for byte from the strip's own
-// `.menu-image-title` spans and `<img src>`s. This replaces the old
-// Infotainment icon strip (13 programs) wholesale: Economy's is a different,
-// shorter list (7) with no overlap. `financial-talk`'s live href actually
-// points at one specific episode (`/program/financial-talk/s1e7`) rather than
-// the program's own page — kept here as the program-level link instead.
-const PROGRAM_ICONS: ProgramIcon[] = [
-  { title: "អំពី គន្លឹះហិរញ្ញវត្ថុ", image: "https://s3.ams.com.kh/economy/2021/05/02_FILO_PWPF-21x36.webp", slug: "financial-talk", href: "https://economy.ams.com.kh/program/financial-talk" },
-  { title: "អក្ខរកម្មឌីជីថល", image: "https://s3.ams.com.kh/economy/2025/04/09_DGLTS01_LDSM-01Primary-Logo_Horizontal.png", slug: "digital-literacy", href: "https://economy.ams.com.kh/movie/digital-literacy" },
-  { title: "ឧស្សាហកម្ម ៤.០", image: "https://s3.ams.com.kh/economy/2025/03/01_IR4.0S01_ICOS.svg", slug: "industry4.0", href: "https://economy.ams.com.kh/movie/industry4.0" },
-  { title: "ចំណេះដឹងហិរញ្ញវត្ថុ", image: "https://s3.ams.com.kh/economy/2025/03/03_FINLS02_PICN-new.png", slug: "financial-literacy", href: "https://economy.ams.com.kh/movie/financial-literacy" },
-  { title: "ធនធានស្រុកយើង", image: "https://s3.ams.com.kh/economy/2025/02/01_ORESS01_ICOS.png", slug: "our-reources", href: "https://economy.ams.com.kh/program/our-reources" },
-  { title: "Hot Topic", image: "https://s3.ams.com.kh/economy/2022/12/HOT-TOPICS-LOGO-GIF-1.gif", slug: "hot-topic", href: "https://economy.ams.com.kh/program/hot-topic" },
-  { title: "Read News", image: "https://s3.ams.com.kh/economy/2022/09/READ-NEWS-LOGO-H32.svg", slug: "read-news", href: "https://economy.ams.com.kh/economic/read-news/" },
-];
+/** Exact compact logo artwork used by the header. Program identity, title and
+ * destination still come from the matching WordPress Program record. Read
+ * News is the sole custom-page item; WordPress has no Program post for it. */
+const PROGRAM_ICON_SLOTS = [
+  { slug: "financial-talk", image: "https://s3.ams.com.kh/economy/2021/05/02_FILO_PWPF-21x36.webp" },
+  { slug: "digital-literacy", image: "https://s3.ams.com.kh/economy/2025/04/09_DGLTS01_LDSM-01Primary-Logo_Horizontal.png" },
+  { slug: "industry4.0", image: "https://s3.ams.com.kh/economy/2025/03/01_IR4.0S01_ICOS.svg" },
+  { slug: "financial-literacy", image: "https://s3.ams.com.kh/economy/2025/03/03_FINLS02_PICN-new.png" },
+  { slug: "our-reources", image: "https://s3.ams.com.kh/economy/2025/02/01_ORESS01_ICOS.png" },
+  { slug: "hot-topic", image: "https://s3.ams.com.kh/economy/2022/12/HOT-TOPICS-LOGO-GIF-1.gif" },
+] as const;
 
-/**
- * The icon strip, from the CMS.
- *
- * Core REST cannot serve WordPress menus (both /wp/v2/menus and
- * /wp/v2/menu-items answer 401 to anonymous callers, measured 2026-08-05 on
- * the Infotainment backend), so the read goes through the fast path's
- * pub-menu resource instead.
- *
- * ⚠ `menu: "ams-infotainment-third-menu"` below is carried over from before
- * the Economy rebrand and is UNVERIFIED against this backend — economy.ams.com.kh
- * almost certainly registers its `មាតិកាឌីជីថល` menu (`#menu-secondary-nav-v3-menu`
- * in the live markup — see PROGRAM_ICONS above) under a different name. If it
- * 404s, this silently falls back to the hardcoded list below, which is
- * harmless (that list is itself transcribed off the same live menu, 2026-08-12)
- * but means editor changes on that menu won't reach the site until the real
- * slug is found and swapped in here.
- */
+const READ_NEWS_ICON: ProgramIcon = {
+  title: "Read News",
+  image: "https://s3.ams.com.kh/economy/2022/09/READ-NEWS-LOGO-H32.svg",
+  slug: "read-news",
+  href: "https://economy.ams.com.kh/economic/read-news/",
+};
+
 export async function getProgramIcons(): Promise<ProgramIcon[]> {
-  try {
-    // Both imports are lazy for the reason in this file's header: MobileNav is
-    // a Client Component that value-imports PROGRAM_ICON_LABEL from here, and
-    // a top-level import would ship the fetch layer (and the curated table) to
-    // the browser with it.
-    const [{ fastPublicFetch }, { CURATED_PROGRAMS }] = await Promise.all([
-      import("./api/fast-public"),
-      import("./program-curation"),
-    ]);
-    const env = await fastPublicFetch<{ data: { items: FastMenuItem[] } }>(
-      "pub-menu",
-      { menu: "ams-infotainment-third-menu" },
-      { revalidate: 3600, tags: ["menu", "navigation"] },
-    );
-    const icons = (env.data?.items ?? [])
-      .map((item) => toProgramIcon(item, CURATED_PROGRAMS))
-      .filter((i): i is ProgramIcon => i !== null);
-    // An empty menu is far more likely to be a bad read than a deliberate
-    // clearing of the strip, so keep the known-good list in that case.
-    return icons.length ? icons : PROGRAM_ICONS;
-  } catch {
-    return PROGRAM_ICONS;
-  }
-}
-
-/** One pub-menu row. `images` is keyed by the meta key the icon was found
- *  under — see the resource's header comment for why the key is discovered
- *  rather than named. (Measured on live: the key is `_thumbnail_id`. The
- *  plugin stores the icon as the menu item's featured image.) */
-interface FastMenuItem {
-  id: number;
-  title: string;
-  url: string;
-  order: number;
-  meta?: Record<string, string>;
-  images?: Record<string, { source_url?: string; sizes?: Record<string, { source_url?: string }> }>;
-}
-
-/** A menu row mapped onto the strip's shape, or null if it carries no icon
- *  (the strip is icons — a row without one has nothing to render). */
-function toProgramIcon(item: FastMenuItem, curated: CuratedLike[]): ProgramIcon | null {
-  const image = firstIconUrl(item.images, item.meta?.["_menu_item_image_size"]);
-  if (!image) return null;
-  return { title: item.title, image, slug: slugFromMenuUrl(item.url, curated), href: item.url };
-}
-
-/** Just the two fields the URL match needs, so this module doesn't depend on
- *  the full CuratedProgram shape. */
-interface CuratedLike {
-  slug: string;
-  wpHref: string;
-}
-
-/**
- * The icon URL, at the rendition the LIVE THEME renders it at.
- *
- * `_menu_item_image_size` is the menu-image plugin's own per-item setting and
- * takes the name of a registered size (`menu-36x36`, `menu-48x48`) or `full`.
- * Honouring it is not a nicety: without it a 36px slot loads the original —
- * one of these is a 2251×2250 JPEG.
- *
- * Verified against the hardcoded strip below, which was transcribed off live's
- * markup independently: this rule reproduces all 13 of its URLs byte for byte,
- * including the portrait one where `menu-36x36` yields `-21x36` (the size NAME
- * is a bounding box; the FILE is named for the fitted result). SVGs carry size
- * entries that all point back at the same file, so they are unaffected either
- * way, and `full` simply has no entry — hence the fallthrough.
- */
-function firstIconUrl(images: FastMenuItem["images"], sizeName?: string): string {
-  for (const entry of Object.values(images ?? {})) {
-    const sized = sizeName ? entry?.sizes?.[sizeName]?.source_url : undefined;
-    if (sized) return sized;
-    if (entry?.source_url) return entry.source_url;
-  }
-  return "";
-}
-
-/**
- * Our route slug for a menu item's WordPress URL.
- *
- * The menu links to live WordPress pages, whose paths are inconsistent
- * (`/program/digital/obsok/`, `/movie/program-digital-oun-khlach/`,
- * `/program/learn/theworld`). CURATED_PROGRAMS already pins each of those to
- * our slug via `wpHref` — that table exists precisely because these URLs do
- * not reduce to a slug by rule. Match on it first; fall back to the last path
- * segment for a program added after the table was written.
- */
-function slugFromMenuUrl(url: string, curated: CuratedLike[]): string {
-  const path = (u: string) => u.replace(/^https?:\/\/[^/]+/, "").replace(/\/+$/, "");
-  const target = path(url);
-  const hit = curated.find((p) => path(p.wpHref) === target);
-  if (hit) return hit.slug;
-  return target.split("/").filter(Boolean).pop() ?? "";
+  // Lazy for the reason in this file's header: MobileNav is a Client Component
+  // that value-imports PROGRAM_ICON_LABEL, so the server fetch layer must not
+  // become a top-level dependency of this module.
+  const { getProgramRegistry, programHref } = await import("./programs");
+  const programs = new Map((await getProgramRegistry()).map(program => [program.slug, program]));
+  const programIcons = PROGRAM_ICON_SLOTS.flatMap(slot => {
+    const program = programs.get(slot.slug);
+    return program
+      ? [{ title: program.title, image: slot.image, slug: program.slug, href: programHref(program.slug) }]
+      : [];
+  });
+  return [...programIcons, READ_NEWS_ICON];
 }
 
 // ─── Program posters ─────────────────────────────────────────────────────────

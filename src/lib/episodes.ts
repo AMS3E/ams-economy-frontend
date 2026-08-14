@@ -18,6 +18,7 @@
 
 import { apiFetch } from "./api/client";
 import { decodeEntities } from "./api/mappers";
+import { toVideo, type Video } from "./api/video";
 import type { HomeCard } from "./home-data";
 import type { WpEpisode, WpListEnvelope } from "./api/wp-types";
 
@@ -326,6 +327,25 @@ export interface RailEpisode {
   meta: string;
 }
 
+/** Adapt one legacy-rail row to the structured card shape used by SeasonGrid.
+ * The legacy endpoint combines runtime and Added date into one text field, so
+ * split it at the same marker its WordPress template prints. */
+export function episodeFromRail(item: RailEpisode): Episode {
+  const slug = item.href.split("/").filter(Boolean).at(-1) ?? String(item.id);
+  const added = item.meta.match(/(?:^|\s)Added:\s*(.+)$/i);
+  const runTime = item.meta.replace(/\s*Added:\s*.+$/i, "").trim();
+  return {
+    id: item.id,
+    slug,
+    title: item.title,
+    episodeNumber: item.label,
+    seasonId: Number(item.label.match(/^S(\d+)/i)?.[1] ?? 0),
+    thumbnail: item.thumbnail,
+    runTime,
+    releaseDate: added?.[1]?.trim() ?? "",
+  };
+}
+
 interface WpEpisodeRail {
   episode_list_html?: string;
   season_dropdown_html?: string;
@@ -448,25 +468,42 @@ export async function fetchEpisodeRail(showId: number): Promise<{ episodes: Rail
  * cropped when stretched across the video stage. The public episode page still
  * contains its Vimeo player id, and Vimeo oEmbed returns the video's own poster.
  */
-export async function fetchEpisodeVideoCover(episodeHref: string): Promise<string> {
+export interface LegacyEpisodeMedia {
+  video: Video | null;
+  cover: string;
+}
+
+/** Resolve both the playable Vimeo source and its wide poster from a legacy
+ * episode page. This is the fallback when the structured episode-detail route
+ * is absent on a WordPress deployment: the live page still embeds the real
+ * Vimeo player, so a missing API must not turn a playable episode into a fake
+ * poster control. */
+export async function fetchLegacyEpisodeMedia(episodeHref: string): Promise<LegacyEpisodeMedia> {
   try {
     const page = await fetch(episodeHref, { next: { revalidate: 3600, tags: ["episodes"] } });
-    if (!page.ok) return "";
+    if (!page.ok) return { video: null, cover: "" };
 
     const html = await page.text();
     // The id appears both as a normal URL and JSON-escaped with `\/`.
     const videoId = html.match(/player\.vimeo\.com(?:\\\/|\/)video(?:\\\/|\/)(\d+)/)?.[1];
-    if (!videoId) return "";
+    if (!videoId) return { video: null, cover: "" };
+
+    const video = toVideo({
+      choice: "episode_url",
+      url: `https://vimeo.com/${videoId}`,
+      attachment: "",
+      embed: "",
+    });
 
     const oembed = await fetch(
       `https://vimeo.com/api/oembed.json?url=${encodeURIComponent(`https://vimeo.com/${videoId}`)}&width=1280`,
       { next: { revalidate: 86400, tags: ["episodes"] } },
     );
-    if (!oembed.ok) return "";
+    if (!oembed.ok) return { video, cover: "" };
 
     const data = (await oembed.json()) as { thumbnail_url?: string };
-    return data.thumbnail_url ?? "";
+    return { video, cover: data.thumbnail_url ?? "" };
   } catch {
-    return "";
+    return { video: null, cover: "" };
   }
 }

@@ -11,7 +11,7 @@
  * before then: a wrong canonical only misleads a crawler, and no crawler sees a
  * preview build.
  */
-export const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://infotainment.ams.com.kh").replace(/\/+$/, "");
+export const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://info.amscloud.cc").replace(/\/+$/, "");
 
 /** og:site_name, and the publisher in JSON-LD. Capitalised as the CMS has it. */
 export const SITE_NAME = "AMS INFOTAINMENT";

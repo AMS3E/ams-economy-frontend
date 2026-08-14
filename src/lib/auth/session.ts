@@ -17,7 +17,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE, SESSION_USER_COOKIE } from "./constants";
 
-const BASE = process.env.API_BASE_URL ?? "https://infotainment.ams.com.kh/wp-json";
+const BASE = process.env.API_BASE_URL ?? "https://economy.ams.com.kh/wp-json";
 
 /** Curated cap→bool map from /web/login and /web/me (see ams_afa_login_caps). */
 export type Capabilities = Record<string, boolean>;

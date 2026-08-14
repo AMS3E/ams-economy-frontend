@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { css, cx } from "@/styled-system/css";
 import SeasonGrid from "@/components/episode/SeasonGrid";
 import { container } from "@/components/layout/shared";
-import { fetchShowEpisodes, groupSeasons } from "@/lib/episodes";
+import { episodeFromRail, fetchEpisodeRail, groupSeasons } from "@/lib/episodes";
 import { getProgramSlugs, programHref, routedProgram } from "@/lib/programs";
 
 // Every episode of a show, grouped by season — the page the season grid's
@@ -43,7 +43,8 @@ export default async function AllEpisodesPage({ params }: Params) {
   const ref = await routedProgram(slug);
   if (!ref) notFound();
 
-  const episodes = ref.showId ? await fetchShowEpisodes(ref.showId) : [];
+  const rail = ref.showId ? await fetchEpisodeRail(ref.showId) : { episodes: [] };
+  const episodes = rail.episodes.map(episodeFromRail);
 
   return (
     <div className={cx(container, css({ paddingBottom: "60px" }))}>

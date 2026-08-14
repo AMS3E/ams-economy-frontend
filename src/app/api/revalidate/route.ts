@@ -11,9 +11,12 @@ import { safeTag } from "@/lib/api/client";
  *
  * `tag` may repeat — the AMS Frontend API plugin (≥1.7.3) sends every tag a
  * publish touches in ONE request. Tags in use across the app: "articles",
- * "home", "article:<slug>", "category:<slug>", "comments:<postId>",
- * "daily-events", "authors", "episodes", "tv-show:<id>", "program",
- * "program:<slug>", "featured-program".
+ * "home", "popular-articles", "category:<slug>", "category-ids:<ids>",
+ * "article", "article:<slug>", "comments", "comments:<postId>",
+ * "daily-events" (reserved — no fetch produces it yet), "authors",
+ * "author:<id>", "categories", "pages", "page:<path>", "episodes",
+ * "episode:<id>", "tv-show:<id>", "program", "program:<slug>",
+ * "program-registry", "featured-program", "media", "media:<id>".
  *
  * Send the RAW slug even when it is Khmer: tags are normalized through
  * safeTag() on both sides, so an over-long percent-encoded slug maps onto the

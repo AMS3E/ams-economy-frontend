@@ -84,11 +84,13 @@ const episodeTitle = css({
 const meta = css({ margin: "3px 0 0", fontSize: "10px", lineHeight: 1.4, color: "muted" });
 
 export default function KhmerInsiderSidebar({
+  programSlug,
   episodes = [],
   title: showTitle,
   schedule: showSchedule,
   currentEpisodeId,
 }: {
+  programSlug: string;
   episodes: RailEpisode[];
   title: string;
   schedule: string;
@@ -108,7 +110,7 @@ export default function KhmerInsiderSidebar({
 
   const internalHref = (href: string) => {
     const episodeSlug = href.split("/").filter(Boolean).at(-1);
-    return episodeSlug ? `/program/khmer-insider/${episodeSlug}` : "/program/khmer-insider";
+    return episodeSlug ? `/program/${programSlug}/${episodeSlug}` : `/program/${programSlug}`;
   };
   const khmerNumber = (number: number) =>
     String(number).replace(/\d/g, digit => "០១២៣៤៥៦៧៨៩"[Number(digit)]);

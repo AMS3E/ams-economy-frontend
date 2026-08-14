@@ -960,7 +960,7 @@ function ams_afa_revalidate_settings_page() {
                         <input type="url" id="ams-afa-reval-url" class="regular-text" style="width:480px"
                                name="<?php echo esc_attr( AMS_AFA_REVALIDATE_OPTION ); ?>[url]"
                                value="<?php echo esc_attr( $cfg['url'] ); ?>"
-                               placeholder="https://ams-infotainment-frontend.vercel.app/api/revalidate" />
+                               placeholder="https://info.amscloud.cc/api/revalidate" />
                         <p class="description">The frontend's <code>/api/revalidate</code> route.</p>
                     </td>
                 </tr>

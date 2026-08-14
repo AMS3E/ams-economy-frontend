@@ -10,7 +10,7 @@
 import { cookies } from "next/headers";
 import { SESSION_COOKIE } from "@/lib/auth/constants";
 
-const BASE = process.env.API_BASE_URL ?? "https://infotainment.ams.com.kh/wp-json";
+const BASE = process.env.API_BASE_URL ?? "https://economy.ams.com.kh/wp-json";
 
 export interface UploadResult {
   ok: boolean;

@@ -10,6 +10,10 @@ in `docs/session-log.md` (newest entry first — admin AND public site).
 light/dark palette, the primitives in `ui.tsx`, the layout patterns and the
 chart rules. **Read it before styling any admin screen.**
 
+`docs/caching.md` — the ISR model, cache tags, the WordPress publish webhook,
+and prebuild coverage per route. **Read it before adding a cached fetch, a new
+route, or a WordPress-side invalidation hook.**
+
 # This is NOT the Next.js you know
 
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.

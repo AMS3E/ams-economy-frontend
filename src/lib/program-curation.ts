@@ -41,10 +41,21 @@ export interface CuratedProgram {
   wpHref: string;
 }
 
-const WP = "https://infotainment.ams.com.kh";
+const WP = "https://economy.ams.com.kh";
 
 export const CURATED_PROGRAMS: CuratedProgram[] = [
   // Colored nav pills (top-right of the header bar).
+  // These two Program movie records do not expose `_khi_tv_show_id` through
+  // public REST, so pin their episode-container relationships here. Their
+  // titles, excerpts and featured images still come from the Program records.
+  { slug: "khmer-insider", title: "Khmer Insider", postType: "movie", postId: 2930, showId: 21395, wpHref: `${WP}/program/khmer-insider` },
+  { slug: "financial-street", title: "វិថីហិរញ្ញវត្ថុ", postType: "movie", postId: 88073, showId: 88448, wpHref: `${WP}/program/financial-street` },
+  { slug: "financial-talk", title: "គន្លឹះហិរញ្ញវត្ថុ", postType: "movie", postId: 165716, showId: 165714, wpHref: `${WP}/program/financial-talk` },
+  { slug: "digital-literacy", title: "អក្ខរកម្មឌីជីថល", postType: "movie", postId: 138439, showId: 138432, wpHref: `${WP}/movie/digital-literacy` },
+  { slug: "industry4.0", title: "ឧស្សាហកម្ម ៤.០", postType: "movie", postId: 136553, showId: 134388, wpHref: `${WP}/movie/industry4.0` },
+  { slug: "financial-literacy", title: "ចំណេះដឹងហិរញ្ញវត្ថុ", postType: "movie", postId: 134265, showId: 134267, wpHref: `${WP}/movie/financial-literacy` },
+  { slug: "our-reources", title: "ធនធានស្រុកយើង", postType: "movie", postId: 134075, showId: 134048, wpHref: `${WP}/program/our-reources` },
+  { slug: "hot-topic", title: "Hot Topic", postType: "movie", postId: 76188, showId: 76126, wpHref: `${WP}/program/hot-topic` },
   { slug: "unlock-the-life", title: "បើកសោជីវិត", postType: "movie", postId: 14428, showId: 14288, wpHref: `${WP}/program/unlock-the-life` },
   { slug: "reaction", title: "ចង់ដឹងរឿងគេ", postType: "movie", postId: 16508, showId: 16518, wpHref: `${WP}/program/reaction` },
   { slug: "vanna-yeatra", title: "វនយាត្រា", postType: "tv_show", postId: 14450, showId: 14450, wpHref: `${WP}/program/vanna-yeatra` },
@@ -79,8 +90,8 @@ export const CURATED_PROGRAMS: CuratedProgram[] = [
   //  1. Its post_name is percent-encoded Khmer, so the derived route would be
   //     /program/ស្ថាបត្យកម្មសកល — while the menu links /tv-show/global_architecture/,
   //     whose last segment ("global_architecture") is in the registry under no
-  //     slug at all. Pinning wpHref makes slugFromMenuUrl resolve the menu URL
-  //     to this row instead of guessing from the path.
+  //     slug at all. Pinning wpHref lets wp-url-map resolve the menu URL to
+  //     this row instead of guessing from the path.
   //  2. It is modelled as BOTH a movie (221836) and a tv_show (221840), like
   //     vanna-yeatra. The tv_show is the one carrying episodes.
   //  3. The movie's `_khi_tv_show_id` is 196771 — ជ្រុងមួយនៃភ្នំពេញ's show, not

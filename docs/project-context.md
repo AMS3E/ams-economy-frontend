@@ -11,14 +11,15 @@ So this is the committed copy. **Keep it in the repo, and keep it current.**
 The other checked-in sources of truth are
 `docs/session-log.md` (session-by-session hand-off, the deepest
 detail), `docs/admin-design-system.md` (the admin's visual language — palette,
-primitives, dark mode) and `docs/api-integration-status.md` (per-feature
-tracker).
+primitives, dark mode), `docs/api-integration-status.md` (per-feature
+tracker), and `docs/caching.md` (the ISR model, cache tags, the WordPress
+publish webhook, and prebuild coverage per route).
 
 ---
 
 ## 1. The backend
 
-WordPress at `https://infotainment.ams.com.kh` (REST base `/wp-json`), **Vodi**
+WordPress at `https://economy.ams.com.kh` (REST base `/wp-json`), **Vodi**
 theme on **MasVideos**; media on `s3.ams.com.kh`. 63 plugins boot on every REST
 request, which is the entire reason the fast path exists (see §4).
 
