@@ -1,7 +1,21 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
+
+// Revive's asyncjs.php (see window.reviveAsync in its source) guards its own
+// init with `if (!reviveAsync.hasOwnProperty(id))`, so re-fetching the script
+// on a later client-side navigation is a silent no-op — it will NOT rescan
+// the DOM for that page's <ins> tags. What it does listen for, permanently,
+// is a `revive-<data-revive-id>-refresh` document event, whose handler
+// (`detect()` + `apply()`) rescans for any <ins data-revive-id> that isn't
+// already marked `data-revive-loaded` and fetches those zones. That's the
+// supported hook for "new ad slots appeared without a page reload".
+function refreshReviveZones(ins: Element) {
+  const id = ins.getAttribute("data-revive-id");
+  if (!id) return;
+  document.dispatchEvent(new CustomEvent(`revive-${id}-refresh`));
+}
 
 const REVIVE_SELECTOR = [
   '[data-revive-zoneid]',
@@ -36,6 +50,7 @@ function removeReviveArtifacts() {
 
 export default function ReviveRouteCleanup() {
   const pathname = usePathname();
+  const isFirstPathname = useRef(true);
 
   useEffect(() => {
     if (document.querySelector("[data-revive-zoneid]")) return;
@@ -45,6 +60,39 @@ export default function ReviveRouteCleanup() {
     const timers = [250, 1000, 3000].map(delay => window.setTimeout(removeReviveArtifacts, delay));
     const observer = new MutationObserver(removeReviveArtifacts);
     observer.observe(document.body, { childList: true });
+
+    return () => {
+      cancelAnimationFrame(frame);
+      timers.forEach(window.clearTimeout);
+      observer.disconnect();
+    };
+  }, [pathname]);
+
+  useEffect(() => {
+    if (isFirstPathname.current) {
+      isFirstPathname.current = false;
+      return;
+    }
+
+    // The new page's <ins data-revive-zoneid> may not be in the DOM yet at
+    // this exact moment — ad slots often sit inside streamed content
+    // (Sidebar, RelatedColumns) that finishes rendering after the route
+    // change itself. Keep checking the same way removeReviveArtifacts does,
+    // and fire the reload exactly once as soon as a slot shows up.
+    let fired = false;
+    const tryRefresh = () => {
+      if (fired) return;
+      const ins = document.querySelector("[data-revive-zoneid]");
+      if (!ins) return;
+      fired = true;
+      refreshReviveZones(ins);
+    };
+
+    tryRefresh();
+    const frame = requestAnimationFrame(tryRefresh);
+    const timers = [250, 1000, 3000].map(delay => window.setTimeout(tryRefresh, delay));
+    const observer = new MutationObserver(tryRefresh);
+    observer.observe(document.body, { childList: true, subtree: true });
 
     return () => {
       cancelAnimationFrame(frame);
