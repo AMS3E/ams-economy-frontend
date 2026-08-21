@@ -14,7 +14,7 @@ interface RawProgram {
   _embedded?: {
     "wp:featuredmedia"?: {
       source_url?: string;
-      media_details?: { sizes?: { medium?: { source_url?: string }; thumbnail?: { source_url?: string } } };
+      media_details?: { sizes?: { large?: { source_url?: string }; medium?: { source_url?: string }; thumbnail?: { source_url?: string } } };
     }[];
   };
 }
@@ -46,7 +46,9 @@ async function fetchType(restBase: string, type: ProgramItem["type"], token?: st
       title: decodeEntities(p.title?.rendered ?? "").trim() || `#${p.id}`,
       type,
       status: p.status,
-      poster: media?.media_details?.sizes?.medium?.source_url ?? media?.source_url ?? "",
+      // large (1024) first: the grid card renders wider than medium's 300px on
+      // any hi-DPI screen, and an upscaled medium is visibly soft.
+      poster: media?.media_details?.sizes?.large?.source_url ?? media?.media_details?.sizes?.medium?.source_url ?? media?.source_url ?? "",
     };
   });
 }
@@ -81,11 +83,15 @@ export async function listProgramsFast(token?: string): Promise<ProgramItem[]> {
   }));
 }
 
-/** The read the BFF should call: fast path first, WP REST if unavailable. */
-export function readPrograms(token?: string): Promise<ProgramItem[]> {
-  return withRestFallback(
+/** The read the BFF should call: fast path first, WP REST if unavailable.
+ *  NEWEST FIRST (owner's call): sorted here, not per path, because the fast
+ *  endpoint carries no date to order by — post id is creation order and both
+ *  paths have it. */
+export async function readPrograms(token?: string): Promise<ProgramItem[]> {
+  const items = await withRestFallback(
     "programs",
     () => listProgramsFast(token),
     () => listPrograms(token),
   );
+  return items.sort((a, b) => b.id - a.id);
 }

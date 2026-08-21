@@ -17,8 +17,8 @@ import { getProgramSlugs, programHref, routedProgram } from "@/lib/programs";
 // "episodes" (no show mints that slug — they're all s1e5-shaped or numeric).
 type Params = { params: Promise<{ slug: string }> };
 
-// ISR: same cadence as the episode lists it renders.
-export const revalidate = 3600;
+// ISR without a timer; WordPress episode saves invalidate the `episodes` tag.
+export const revalidate = false;
 
 // Same reasoning as the program page: the registry is dynamic now, so known
 // programs prebuild and new ones render on first visit; a bogus slug 404s in

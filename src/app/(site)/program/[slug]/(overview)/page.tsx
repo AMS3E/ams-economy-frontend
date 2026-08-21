@@ -7,8 +7,8 @@ import { withMinDuration } from "@/lib/timing";
 
 type Params = { params: Promise<{ slug: string }> };
 
-// ISR: revalidate hourly; on-demand invalidation via /api/revalidate.
-export const revalidate = 3600;
+// ISR without a timer; WordPress program/episode saves invalidate fetch tags.
+export const revalidate = false;
 export const dynamicParams = true;
 
 // Same reasoning as [episode]/page.tsx: floors loading.tsx's visible time so a
@@ -38,6 +38,7 @@ export default async function ProgramPage({ params }: Params) {
       programSlug={slug}
       program={data.program}
       episode={data.episode}
+      programVideo={data.programVideo}
       episodes={data.episodes}
       videoCover={data.videoCover}
       currentEpisode={data.current}

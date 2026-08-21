@@ -7,12 +7,13 @@ import { css } from "@/styled-system/css";
 import { ac, type Status } from "../tokens";
 import { Icon } from "../icons";
 import { Dropdown, SearchInput, PrimaryButton, type Option } from "../Dropdown";
-import { Surface, StatusPill, Table, Th, Td, Tr, TableFooter, Button, EmptyState } from "../ui";
+import { Surface, PageHeader, StatusPill, Table, Th, Td, Tr, TableFooter, Button, EmptyState } from "../ui";
 import { Bar, SkeletonKeyframes } from "../Skeleton";
 import RefreshButton from "../RefreshButton";
 import ConfirmDialog from "../ConfirmDialog";
 import ArticlesTabs from "./ArticlesTabs";
 import { trashPost } from "@/lib/admin/screen-actions";
+import LegacySiteChip, { startLegacyRefresh } from "../LegacySiteChip";
 import { DEFAULT_STATUSES } from "@/lib/admin/constants";
 import type { PostListResult } from "@/lib/admin/posts";
 import type { CategoryNode } from "@/lib/admin/categories";
@@ -78,17 +79,17 @@ export default function ArticlesView({
   const [trashingId, setTrashingId] = useState<number | null>(null);
   // The row awaiting confirmation; the dialog stays up while the write runs so
   // a rejection lands in it rather than in a native alert.
-  const [confirmTrash, setConfirmTrash] = useState<{ id: number; title: string } | null>(null);
+  const [confirmTrash, setConfirmTrash] = useState<{ id: number; title: string; status: string } | null>(null);
   const [trashError, setTrashError] = useState<string | null>(null);
 
   // Row-level "move to trash". Lives on the row (a Link), so the handler must
   // swallow the navigation.
-  const trash = (e: React.MouseEvent, id: number, title: string) => {
+  const trash = (e: React.MouseEvent, id: number, title: string, status: string) => {
     e.preventDefault();
     e.stopPropagation();
     if (trashingId) return;
     setTrashError(null);
-    setConfirmTrash({ id, title });
+    setConfirmTrash({ id, title, status });
   };
 
   const doTrash = async () => {
@@ -104,6 +105,11 @@ export default function ArticlesView({
     }
     setConfirmTrash(null);
     onTrashed(); // invalidate the client posts cache (the action busted the server tag)
+    // A LIVE article leaves a ghost behind on the legacy site: its cached page
+    // plus every listing that still shows it. Same purge as publishing (the
+    // plugin reconstructs the pre-trash URL — see afa 1.17.1); drafts and
+    // scheduled posts never had public pages, so nothing to clear for them.
+    if (target.status === "publish") startLegacyRefresh(target.id);
   };
 
   const go = (next: Partial<Omit<Query, "page">> & { page?: number }) => {
@@ -151,50 +157,70 @@ export default function ArticlesView({
   if (query.date) chips.push({ key: "date", kind: "Date", value: labelOf(DATE_OPTIONS, query.date), clear: () => go({ date: "" }) });
 
   return (
-    <div className={css({ padding: "32px 40px 48px" })}>
-      <ArticlesTabs />
+    <div>
+      {/* Title band. No `trail` — the breadcrumb is deliberately off here (the
+          tab strip below already says where you are). The primary action moved
+          up out of the toolbar so the screen opens the way every other one
+          does: what this is, then what you can do about it. */}
+      <PageHeader
+        title="Articles"
+        sub={loading ? "Loading…" : `${total.toLocaleString("en-US")} ${total === 1 ? "story" : "stories"}`}
+        actions={
+          <>
+            {/* No postId: the list isn't one post's screen, so it wears
+                whatever legacy-cache run is active (a trash fired here, or a
+                save the user navigated away from). */}
+            <LegacySiteChip />
+            <RefreshButton fetchedAt={fetchedAt} refreshing={refreshing} onRefresh={onRefresh} />
+            <PrimaryButton label="New Article" href="/admin/articles/new" />
+          </>
+        }
+      />
 
-      {/* Toolbar */}
-      <div className={css({ display: "flex", alignItems: "center", gap: "10px", marginTop: "20px", flexWrap: "wrap" })}>
-        <form onSubmit={onSearchSubmit} className={css({ flex: 1, minWidth: "260px", maxWidth: "380px", display: "flex" })}>
-          <SearchInput placeholder="Search articles…" name="q" defaultValue={query.search} width="380px" />
-        </form>
-        <Dropdown label={query.status !== DEFAULT_STATUSES ? labelOf(STATUS_OPTIONS, query.status) : "Status"} hasValue={query.status !== DEFAULT_STATUSES} {...menu("status")} options={STATUS_OPTIONS} selected={query.status} onSelect={(v) => go({ status: v })} />
-        <Dropdown label={query.category && catName ? catName : "Category"} hasValue={!!query.category} {...menu("category")} options={categoryOptions} selected={query.category} onSelect={(v) => go({ category: v })} minWidth={220} />
-        {authors.length > 0 ? (
-          <Dropdown label={query.author && authorName ? authorName : "Author"} hasValue={!!query.author} {...menu("author")} options={authorOptions} selected={query.author} onSelect={(v) => go({ author: v })} minWidth={220} />
+      <Surface>
+        {/* Tabs and the filters share one row, so the rule beneath them reads as
+            the table's own header rather than as a second bar. */}
+        <ArticlesTabs
+          trailing={
+            <>
+              <form onSubmit={onSearchSubmit} className={css({ display: "flex", minWidth: "220px" })}>
+                <SearchInput placeholder="Search articles…" name="q" defaultValue={query.search} width="260px" />
+              </form>
+              <Dropdown label={query.status !== DEFAULT_STATUSES ? labelOf(STATUS_OPTIONS, query.status) : "Status"} hasValue={query.status !== DEFAULT_STATUSES} {...menu("status")} options={STATUS_OPTIONS} selected={query.status} onSelect={(v) => go({ status: v })} />
+              <Dropdown label={query.category && catName ? catName : "Category"} hasValue={!!query.category} {...menu("category")} options={categoryOptions} selected={query.category} onSelect={(v) => go({ category: v })} minWidth={220} />
+              {authors.length > 0 ? (
+                <Dropdown label={query.author && authorName ? authorName : "Author"} hasValue={!!query.author} {...menu("author")} options={authorOptions} selected={query.author} onSelect={(v) => go({ author: v })} minWidth={220} />
+              ) : null}
+              <Dropdown label={query.date ? labelOf(DATE_OPTIONS, query.date) : "Date"} hasValue={!!query.date} {...menu("date")} options={DATE_OPTIONS} selected={query.date} onSelect={(v) => go({ date: v })} />
+            </>
+          }
+        />
+
+        {/* Active filter chips */}
+        {chips.length ? (
+          <div className={css({ display: "flex", alignItems: "center", gap: "8px", padding: "12px 22px", flexWrap: "wrap" })} style={{ borderBottom: `1px solid ${ac.border}` }}>
+            {chips.map((c) => (
+              <Chip key={c.key} kind={c.kind} value={c.value} onRemove={c.clear} />
+            ))}
+            <button type="button" onClick={() => go({ search: "", status: DEFAULT_STATUSES, category: "", author: "", date: "" })} className={css({ fontSize: "12px", cursor: "pointer", padding: "4px 6px", border: "none", background: "transparent", _hover: { color: ac.text } })} style={{ color: ac.muted }}>
+              Clear all
+            </button>
+          </div>
         ) : null}
-        <Dropdown label={query.date ? labelOf(DATE_OPTIONS, query.date) : "Date"} hasValue={!!query.date} {...menu("date")} options={DATE_OPTIONS} selected={query.date} onSelect={(v) => go({ date: v })} />
-        <div className={css({ flex: 1 })} />
-        <RefreshButton fetchedAt={fetchedAt} refreshing={refreshing} onRefresh={onRefresh} />
-        <PrimaryButton label="New Article" href="/admin/articles/new" />
-      </div>
 
-      {/* Active filter chips */}
-      {chips.length ? (
-        <div className={css({ display: "flex", alignItems: "center", gap: "8px", marginTop: "12px", flexWrap: "wrap" })}>
-          {chips.map((c) => (
-            <Chip key={c.key} kind={c.kind} value={c.value} onRemove={c.clear} />
-          ))}
-          <button type="button" onClick={() => go({ search: "", status: DEFAULT_STATUSES, category: "", author: "", date: "" })} className={css({ fontSize: "12px", cursor: "pointer", padding: "4px 6px", border: "none", background: "transparent", _hover: { color: ac.text } })} style={{ color: ac.muted }}>
-            Clear all
-          </button>
-        </div>
-      ) : null}
+        {/* The table. Same anatomy as the Users list on purpose — a real
+            <table>, the shared header, one row-hover — so the two most-used
+            screens in the tool are recognisably the same object. The ROW is not
+            the link (a <tr> cannot be an anchor): the title carries it, which
+            also gives keyboard users one stop per row instead of one per cell.
 
-      {/* The table. Same anatomy as the Users list on purpose — a real <table>,
-          the shared header band, one row-hover — so the two most-used screens
-          in the tool are recognisably the same object. The ROW is not the link
-          (a <tr> cannot be an anchor): the title carries it, which also gives
-          keyboard users one stop per row instead of one per cell. */}
-      <Surface style={{ marginTop: "16px", overflow: "hidden" }}>
-        {/* Page turns / background refetches dim the (kept-previous) rows
+            Page turns / background refetches dim the (kept-previous) rows
             instead of unmounting them into a skeleton. */}
         <div style={{ opacity: fetching && !loading ? 0.55 : 1, transition: "opacity .15s" }}>
           <Table>
             <thead>
               <tr>
-                <Th width="64px" />
+                <Th width="104px" />
                 <Th>Title</Th>
                 <Th width="210px">Category</Th>
                 <Th width="160px">Author</Th>
@@ -207,7 +233,7 @@ export default function ArticlesView({
               {loading && !error ? (
                 Array.from({ length: perPage }, (_, i) => (
                   <tr key={i} aria-busy>
-                    <Td><Bar w={40} h={40} r={8} /></Td>
+                    <Td><Bar w={80} h={80} r={0} /></Td>
                     <Td><Bar w={i % 2 ? "70%" : "52%"} h={15} /></Td>
                     <Td><Bar w={120} h={12} /></Td>
                     <Td><Bar w={110} h={12} /></Td>
@@ -238,9 +264,9 @@ export default function ArticlesView({
                     <Td>
                       {a.thumb ? (
                         // eslint-disable-next-line @next/next/no-img-element -- admin-only thumbnail; next/image would need remotePatterns for the S3 host
-                        <img data-thumb src={a.thumb} alt="" width={40} height={40} style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 8, border: `1px solid ${ac.border}`, transition: "border-color .12s", display: "block" }} />
+                        <img data-thumb src={a.thumb} alt="" width={40} height={40} style={{ width: 40, height: 40, objectFit: "cover", border: `1px solid ${ac.border}`, transition: "border-color .12s", display: "block" }} />
                       ) : (
-                        <div data-thumb style={{ width: 40, height: 40, borderRadius: 8, border: `1px solid ${ac.border}`, background: ac.skeleton, transition: "border-color .12s" }} />
+                        <div data-thumb style={{ width: 40, height: 40, border: `1px solid ${ac.border}`, background: ac.skeleton, transition: "border-color .12s" }} />
                       )}
                     </Td>
                     <Td>
@@ -264,7 +290,7 @@ export default function ArticlesView({
                           type="button"
                           data-go
                           disabled={trashingId !== null}
-                          onClick={(e) => trash(e, a.id, a.title)}
+                          onClick={(e) => trash(e, a.id, a.title, a.status)}
                           aria-label={`Move “${a.title}” to trash`}
                           className={css({ width: "26px", height: "26px", borderRadius: "7px", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "none", background: "transparent", opacity: 0, transition: "opacity .14s ease, transform .14s ease, color .12s", _hover: { background: "var(--colors-admin-danger-tint)", color: "var(--colors-admin-danger)" }, _focusVisible: { opacity: 1, transform: "translateX(0)", outline: "2px solid var(--colors-admin-focus)", outlineOffset: "2px" } })}
                           style={{ transform: "translateX(-4px)", color: trashingId === a.id ? ac.danger : ac.faint }}

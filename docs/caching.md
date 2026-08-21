@@ -27,7 +27,7 @@ writable by the unprivileged user ISR writes as.
 
 | Layer | Where | Scope |
 |---|---|---|
-| Server ISR / fetch cache | `.next/cache`, this Next instance | Every visitor, until tag-busted or the 3600s window elapses |
+| Server ISR / fetch cache | `.next/cache`, this Next instance | Every visitor, until tag-busted; most routes also have a 3600s fallback window, while Program routes do not |
 | WordPress's own `ams-cache` plugin | WP host, separate system | `scm_preload_critical_urls()` re-warms *WordPress-rendered* pages — irrelevant to the public site, which is this frontend. See project-context.md §3 for why a WP write can take minutes because of it. Do not confuse with the frontend's ISR cache. |
 | Client router cache | The visiting browser tab | `next.config.ts` `experimental.staleTimes: { dynamic: 180, static: 300 }` — only affects `<Link>` client-side navigation within one tab; a hard reload always hits the server. |
 
@@ -37,8 +37,8 @@ writable by the unprivileged user ISR writes as.
 
 | Duration | Where | What |
 |---|---|---|
-| **3600s (1h)** | ~30 call sites in `src/lib/*.ts`; every page's `export const revalidate` | The house default. Every page-level `revalidate` matches its own fetches' window — keep them in sync when adding a route. |
-| **86400s (24h)** | `episode.ts:37` (`fetchVimeoRunTime`), `episodes.ts:500` (inside `fetchLegacyEpisodeMedia`) | The only two calls hitting Vimeo's own oEmbed API directly, not WP. Runtime/thumbnail don't change once a video's up. |
+| **`false` (indefinite)** | `/program` routes and their reads in `programs.ts`, `episodes.ts`, and `episode.ts` | Program pages have no timer. They remain cached until the WordPress save hook invalidates `program`, `episodes`, or a scoped show/episode tag. Vimeo metadata follows the same rule so it cannot silently lower the whole route's ISR lifetime. |
+| **3600s (1h)** | Other public call sites in `src/lib/*.ts` and their pages' `export const revalidate` | The house default outside Program. Every page-level `revalidate` matches its own fetches' window — keep them in sync when adding a route. |
 | **180s / 300s** | `next.config.ts:15-18` `staleTimes.dynamic`/`.static` | Client router cache, not server-side — see §1. |
 
 ---
@@ -55,16 +55,14 @@ WP publish/unpublish/trash
           (never blocks the WP save)
           └─ POST /api/revalidate?secret=...&tag=X&tag=Y...
                └─ src/app/api/revalidate/route.ts checks REVALIDATE_SECRET,
-                  calls revalidateTag(safeTag(tag), "max") per tag
+                  calls revalidateTag(safeTag(tag), { expire: 0 }) per tag
 ```
 
-**`revalidateTag(tag, "max")` does NOT regenerate anything immediately.** Per
-Next 16's own docs (`node_modules/next/dist/docs/.../revalidateTag.md`): it
-marks the tag's cache entries stale; fresh content is only fetched when a page
-using that tag is *next visited*. That first visitor after the bust still sees
-the *old* content (stale-while-revalidate) — the visitor *after* that one sees
-the regenerated page. There is no proactive warm-up crawl. A low-traffic page
-can sit marked-stale-but-never-regenerated indefinitely if nobody visits it.
+**`revalidateTag(tag, { expire: 0 })` expires matching data immediately but does
+not proactively regenerate pages.** Per Next 16's webhook guidance, the first
+visitor after the bust triggers a blocking regeneration and receives the fresh
+page. A low-traffic page can therefore remain expired-but-not-regenerated until
+somebody visits it, without serving its old data after that visit.
 
 `REVALIDATE_SECRET` (Dokploy env) must equal the WordPress-side secret in
 **Settings → Frontend Cache**. A wrong secret and an unset one both 401 —
@@ -172,7 +170,7 @@ zero feedback on every real click.
 1. Route through `apiFetch`/`fastPublicFetch` with explicit `{ revalidate,
    tags }`. Never a bare `fetch`.
 2. Match the page's `export const revalidate` to the fetch's `revalidate`
-   (3600 unless you have a specific reason not to, per §2).
+   (3600 by default; `false` throughout Program routes, per §2).
 3. Tag it with something a WordPress publish event can actually send —
    check `ams_afa_revalidate_tags()` in `ams-frontend-api.php` for what's
    available per post type before inventing a new tag name; if you need a new

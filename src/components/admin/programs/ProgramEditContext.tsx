@@ -6,6 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { EditableProgram } from "@/lib/admin/program-edit";
 import { saveProgramAction, setProgramStatusAction, type ProgramPayload } from "@/lib/admin/program-actions";
 import { adminKeys } from "@/lib/admin/queries";
+import { startLegacyRefresh } from "../LegacySiteChip";
 
 // Bridges the [id] layout's persistent top bar (which owns the Save button)
 // and the Details tab's form (which owns the fields). The form registers a
@@ -81,6 +82,12 @@ export default function ProgramEditProvider({
         return;
       }
       setSaveMsg({ kind: "ok", text: okText });
+      // The write changed something the OLD WordPress site shows — it is
+      // published now, or it was until this write (an unpublish). Our writes
+      // skip AMS Cache's purge hooks (the fast-save fix), so kick off the
+      // background purge+re-warm; the chip in the top bar narrates it.
+      // `program.status` here is the PRE-save status.
+      if (status === "publish" || program.status === "publish") startLegacyRefresh(program.id);
       if (status) {
         // The action returned ok, so WordPress HAS this status — show it now and
         // stay busy until the refreshed data agrees.
@@ -95,7 +102,7 @@ export default function ProgramEditProvider({
       }
       router.refresh(); // re-pull the (no-store) server data behind the editor
     },
-    [queryClient, router],
+    [program.id, program.status, queryClient, router],
   );
 
   // True from the moment a status write succeeds until the server data catches

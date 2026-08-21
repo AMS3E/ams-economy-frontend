@@ -8,6 +8,8 @@ import { Icon } from "../icons";
 import { BentoCard } from "../ui";
 import ConfirmDialog from "../ConfirmDialog";
 import MediaPicker from "../MediaPicker";
+import { startLegacyRefresh } from "../LegacySiteChip";
+import { useProgramEdit } from "./ProgramEditContext";
 import type { AdminEpisode } from "@/lib/admin/program-edit";
 import {
   createShowAction,
@@ -43,6 +45,12 @@ export default function EpisodesList({
   programTitle: string;
 }) {
   const router = useRouter();
+  // Episode writes only matter to the legacy site when the PROGRAM is live:
+  // episodes of a draft program aren't linked anywhere, so their pages can't
+  // have been visited and cached. Default to purging when the context is
+  // somehow absent — over-purging is safe, a missed purge is the bug.
+  const edit = useProgramEdit();
+  const programLive = edit?.program ? edit.program.status === "publish" : true;
   const [search, setSearch] = useState("");
   // Season number of the open group; null = all collapsed. Seeded with the
   // newest season (episodes arrive sorted season-desc).
@@ -50,7 +58,18 @@ export default function EpisodesList({
   const [adding, setAdding] = useState(false);
   // The row being edited (null = the dialog is closed or in create mode).
   const [editing, setEditing] = useState<AdminEpisode | null>(null);
-  const [saved, setSaved] = useState<{ label: string; mode: "created" | "updated" } | null>(null);
+  const [saved, setSaved] = useState<{ label: string; mode: "created" | "updated" | "trashed" } | null>(null);
+  // Rows the server list hasn't confirmed yet — created/edited this session.
+  // The list previously relied on router.refresh() alone, which raced the
+  // slow WP read and left the new episode invisible until a manual reload
+  // with nothing saying it worked. A row leaves the overlay by DERIVATION
+  // (the server row appears and matches), never by an effect — the repo's
+  // no-setState-in-effect rule stays untouched.
+  const [overlay, setOverlay] = useState<Record<number, AdminEpisode>>({});
+  // The mirror image for trash: ids hidden the moment the trash succeeds,
+  // instead of lingering until router.refresh() catches up. Entries go inert
+  // by the same derivation once the server list stops carrying the id.
+  const [removed, setRemoved] = useState<Record<number, true>>({});
   // The row awaiting confirmation; the dialog stays up while the write runs so
   // a failure lands in it rather than in a second popup.
   const [confirmTrash, setConfirmTrash] = useState<AdminEpisode | null>(null);
@@ -69,7 +88,21 @@ export default function EpisodesList({
       return;
     }
     setConfirmTrash(null);
-    setSaved(null);
+    // The row vanishes NOW and the banner says so — reloading to check is
+    // exactly what this exists to end.
+    setRemoved((r) => ({ ...r, [ep.id]: true }));
+    setSaved({ label: ep.label || ep.title, mode: "trashed" });
+    // A trashed row must not resurrect through the overlay.
+    setOverlay((o) => {
+      if (!o[ep.id]) return o;
+      const rest = { ...o };
+      delete rest[ep.id];
+      return rest;
+    });
+    // Clear the legacy site's cached copies — the episode's own page plus its
+    // show's and movie's pages (afa 1.17.2 walks the family links, 1.17.1
+    // reconstructs the pre-trash URL).
+    if (programLive) startLegacyRefresh(ep.id);
     router.refresh(); // this tab is a server page — re-pull the episode list
   };
 
@@ -77,10 +110,23 @@ export default function EpisodesList({
     return <CreateShowCard programId={programId} programTitle={programTitle} onCreated={() => router.refresh()} />;
   }
 
+  // Overlay rows stand in for (or ahead of) the server list until it agrees,
+  // re-sorted into the same season-desc / episode-desc order the loader
+  // guarantees so a new episode lands in its season, not at an edge.
+  const isConfirmed = (o: AdminEpisode) => {
+    const s = episodes.find((e) => e.id === o.id);
+    return !!s && s.title === o.title && s.label === o.label && s.runTime === o.runTime;
+  };
+  const pendingRows = Object.values(overlay).filter((o) => !isConfirmed(o) && !removed[o.id]);
+  const pendingIds = new Set(pendingRows.map((o) => o.id));
+  const all = [...pendingRows, ...episodes.filter((e) => !pendingIds.has(e.id) && !removed[e.id])].sort(
+    (a, b) => b.season - a.season || b.episode - a.episode,
+  );
+
   const q = search.trim().toLowerCase();
   const list = q
-    ? episodes.filter((e) => e.title.toLowerCase().includes(q) || e.label.toLowerCase().includes(q))
-    : episodes;
+    ? all.filter((e) => e.title.toLowerCase().includes(q) || e.label.toLowerCase().includes(q))
+    : all;
 
   // Group into seasons, preserving the newest-first ordering from the loader.
   const groups: { season: number; eps: AdminEpisode[] }[] = [];
@@ -98,7 +144,7 @@ export default function EpisodesList({
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder={`Search ${episodes.length} episodes…`}
+            placeholder={`Search ${all.length} episodes…`}
             className={css({ width: "100%", height: "36px", padding: "0 12px 0 36px", borderRadius: "8px", fontSize: "13.5px" })}
             style={{ background: ac.surface, border: `1px solid ${ac.border}`, color: ac.text }}
           />
@@ -111,7 +157,7 @@ export default function EpisodesList({
             setEditing(null);
             setAdding(true);
           }}
-          className={css({ height: "36px", padding: "0 16px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "7px", border: "none", color: "#fff", transition: "background .12s", _hover: { background: ac.accentHover } })}
+          className={css({ height: "36px", padding: "0 16px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "7px", border: "none", color: "var(--colors-admin-accent-fg)", transition: "background .12s", _hover: { background: ac.accentHover } })}
           style={{ background: ac.accent }}
         >
           <Icon name="plus" size={13} strokeWidth={2.2} />
@@ -129,10 +175,17 @@ export default function EpisodesList({
             setAdding(false);
             setEditing(null);
           }}
-          onSaved={(label, mode) => {
+          onSaved={(mode, row) => {
             setAdding(false);
             setEditing(null);
-            setSaved({ label, mode });
+            setSaved({ label: row.label, mode });
+            // Show it NOW from what the dialog already knows; the server list
+            // confirms (and replaces) it when router.refresh() lands.
+            if (row.id) setOverlay((o) => ({ ...o, [row.id]: row }));
+            setOpenSeason(row.season);
+            // A created/updated episode changes its show's and movie's pages
+            // on the legacy site (episodes are always posted PUBLISHED).
+            if (programLive && row.id) startLegacyRefresh(row.id);
             router.refresh();
           }}
         />
@@ -145,7 +198,7 @@ export default function EpisodesList({
           style={{ background: ac.dataSoft, border: `1px solid ${ac.data}`, color: ac.data }}
         >
           <Icon name="check" size={14} strokeWidth={2.2} />
-          <span>Episode <strong>{saved.label}</strong> {saved.mode === "created" ? "published" : "updated"}.</span>
+          <span>Episode <strong>{saved.label}</strong> {saved.mode === "created" ? "published" : saved.mode === "updated" ? "updated" : "moved to trash"}.</span>
           <div className={css({ flex: 1 })} />
           <button type="button" onClick={() => setSaved(null)} aria-label="Dismiss" className={css({ width: "24px", height: "24px", borderRadius: "7px", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "none", background: "transparent", _hover: { background: ac.dataSoft } })} style={{ color: ac.data }}>
             <Icon name="x" size={11} strokeWidth={2.2} />
@@ -157,15 +210,15 @@ export default function EpisodesList({
         <div className={css({ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", fontSize: "13px", fontWeight: 600 })} style={{ borderBottom: `1px solid ${ac.border}` }}>
           <span>Episodes</span>
           <span className={css({ fontSize: "12px", fontVariantNumeric: "tabular-nums" })} style={{ color: ac.faint }}>
-            {list.length === episodes.length
-              ? `${episodes.length} episode${episodes.length === 1 ? "" : "s"}`
-              : `${list.length} of ${episodes.length}`}
+            {list.length === all.length
+              ? `${all.length} episode${all.length === 1 ? "" : "s"}`
+              : `${list.length} of ${all.length}`}
           </span>
         </div>
 
         {list.length === 0 ? (
           <div className={css({ padding: "32px", textAlign: "center", fontSize: "13px" })} style={{ color: ac.muted }}>
-            {episodes.length === 0 ? "No episodes yet — add the first one." : `No episodes match “${search.trim()}”.`}
+            {all.length === 0 ? "No episodes yet — add the first one." : `No episodes match “${search.trim()}”.`}
           </div>
         ) : (
           <div className={css({ padding: "4px 0 8px" })}>
@@ -187,7 +240,7 @@ export default function EpisodesList({
                   </span>
                 </button>
                 {isOpen ? eps.map((ep) => (
-                  <div key={ep.id} className={css({ display: "flex", alignItems: "center", gap: "12px", padding: "8px 20px", _hover: { background: ac.surfaceHover, "& [data-acts]": { opacity: 1 } } })} style={{ borderTop: `1px solid ${ac.rowLine}`, opacity: trashing && confirmTrash?.id === ep.id ? 0.5 : 1 }}>
+                  <div key={ep.id} className={css({ display: "flex", alignItems: "center", gap: "12px", padding: "8px 20px", _hover: { background: ac.surfaceHover, "& [data-acts]": { opacity: 1 } } })} style={{ borderTop: `1px solid ${ac.rowLine}`, opacity: trashing && confirmTrash?.id === ep.id ? 0.5 : pendingIds.has(ep.id) ? 0.72 : 1 }}>
                     {ep.thumbnail ? (
                       // eslint-disable-next-line @next/next/no-img-element -- admin thumbnail; next/image needs remotePatterns for the S3 host
                       <img src={ep.thumbnail} alt="" loading="lazy" style={{ width: 56, height: 32, objectFit: "cover", borderRadius: 5, border: `1px solid ${ac.border}`, flex: "none" }} />
@@ -200,6 +253,11 @@ export default function EpisodesList({
                     <span className={css({ flex: 1, minWidth: 0, fontSize: "13.5px", lineHeight: 1.6, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" })}>
                       {ep.title}
                     </span>
+                    {pendingIds.has(ep.id) ? (
+                      <span title="Saved — waiting for the server list to confirm" className={css({ fontSize: "10.5px", flex: "none", padding: "2px 8px", borderRadius: "999px" })} style={{ background: ac.dataSoft, color: ac.data }}>
+                        syncing…
+                      </span>
+                    ) : null}
                     {ep.runTime ? (
                       <span className={css({ fontSize: "11.5px", flex: "none", fontVariantNumeric: "tabular-nums" })} style={{ color: ac.faint }}>{ep.runTime}</span>
                     ) : null}
@@ -322,7 +380,7 @@ function CreateShowCard({ programId, programTitle, onCreated }: { programId: num
           <button
             type="button"
             onClick={() => setConfirming(true)}
-            className={css({ marginTop: "16px", height: "36px", padding: "0 18px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", border: "none", color: "#fff", display: "inline-flex", alignItems: "center", gap: "7px", transition: "background .12s", _hover: { background: ac.accentHover } })}
+            className={css({ marginTop: "16px", height: "36px", padding: "0 18px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", border: "none", color: "var(--colors-admin-accent-fg)", display: "inline-flex", alignItems: "center", gap: "7px", transition: "background .12s", _hover: { background: ac.accentHover } })}
             style={{ background: ac.accent }}
           >
             <Icon name="plus" size={13} strokeWidth={2.2} />
@@ -344,7 +402,7 @@ function CreateShowCard({ programId, programTitle, onCreated }: { programId: num
               <button type="button" onClick={() => setConfirming(false)} className={css({ height: "34px", padding: "0 14px", borderRadius: "8px", fontSize: "13px", cursor: "pointer" })} style={{ background: ac.surface, border: `1px solid ${ac.border}`, color: ac.text }}>
                 Cancel
               </button>
-              <button type="button" onClick={() => void create()} className={css({ height: "34px", padding: "0 16px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", border: "none", color: "#fff", transition: "background .12s", _hover: { background: ac.accentHover } })} style={{ background: ac.accent }}>
+              <button type="button" onClick={() => void create()} className={css({ height: "34px", padding: "0 16px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", border: "none", color: "var(--colors-admin-accent-fg)", transition: "background .12s", _hover: { background: ac.accentHover } })} style={{ background: ac.accent }}>
                 Create collection
               </button>
             </div>
@@ -374,7 +432,8 @@ function EpisodeDialog({
   /** The row being edited; null = create a new episode. */
   editing: AdminEpisode | null;
   onClose: () => void;
-  onSaved: (label: string, mode: "created" | "updated") => void;
+  /** Fires with a fully-formed row so the list can show it immediately. */
+  onSaved: (mode: "created" | "updated", row: AdminEpisode) => void;
 }) {
   // Create: prefill from the newest labelled episode (same season, next
   // number). Edit: seed from the list row so the fields aren't empty while the
@@ -449,7 +508,19 @@ function EpisodeDialog({
         setError(res.error ?? `Couldn't ${editing ? "save" : "create"} the episode.`);
         return;
       }
-      onSaved(`S${Number(season)}:E${Number(episode)}`, editing ? "updated" : "created");
+      const iso = releaseDate.split("-");
+      onSaved(editing ? "updated" : "created", {
+        id: editing ? editing.id : (res.id ?? 0),
+        title,
+        label: `S${Number(season)}:E${Number(episode)}`,
+        season: Number(season) || 0,
+        episode: Number(episode) || 0,
+        runTime,
+        // The date input holds ISO; the list shows dd.mm.yyyy like the loader.
+        releaseDate: iso.length === 3 ? `${iso[2]}.${iso[1]}.${iso[0]}` : "",
+        thumbnail: thumb?.url || editing?.thumbnail || "",
+        permalink: editing?.permalink ?? "",
+      });
     } catch (e) {
       setError(e instanceof Error && e.message ? `Request failed: ${e.message}` : "Request failed — check the server console.");
     } finally {
@@ -558,7 +629,7 @@ function EpisodeDialog({
             <button type="button" onClick={onClose} className={css({ height: "36px", padding: "0 14px", borderRadius: "8px", fontSize: "13px", cursor: "pointer" })} style={fieldStyle}>
               Cancel
             </button>
-            <button type="submit" disabled={busy} className={css({ height: "36px", padding: "0 18px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", border: "none", color: "#fff", transition: "background .12s", _hover: { background: ac.accentHover } })} style={{ background: ac.accent, opacity: busy ? 0.7 : 1 }}>
+            <button type="submit" disabled={busy} className={css({ height: "36px", padding: "0 18px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", border: "none", color: "var(--colors-admin-accent-fg)", transition: "background .12s", _hover: { background: ac.accentHover } })} style={{ background: ac.accent, opacity: busy ? 0.7 : 1 }}>
               {busy ? (editing ? "Saving…" : "Publishing…") : editing ? "Save episode" : "Publish episode"}
             </button>
           </div>

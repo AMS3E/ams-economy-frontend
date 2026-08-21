@@ -80,7 +80,7 @@ async function fetchType(type: ProgramPostType): Promise<RawProgramRow[]> {
       // Tagged "program" so the plugin's publish webhook (≥1.7.3, which sends
       // that tag for movie/tv_show saves) refreshes routing on publish, plus a
       // registry-specific tag the admin's create action busts directly.
-      { revalidate: 3600, tags: ["program", "program-registry"] },
+      { revalidate: false, tags: ["program", "program-registry"] },
     );
     rows.push(...batch);
     if (batch.length < PER_PAGE) break;
@@ -137,7 +137,7 @@ function fetchProgramRows(): Promise<{ movies: RawProgramRow[]; shows: RawProgra
       const env = await fastPublicFetch<{ data: { movies: FastProgramRow[]; tv_shows: FastProgramRow[] } }>(
         "pub-programs",
         {},
-        { revalidate: 3600, tags: ["program", "program-registry"] },
+        { revalidate: false, tags: ["program", "program-registry"] },
       );
       return {
         movies: (env.data?.movies ?? []).map(fromFastRow),
@@ -319,7 +319,7 @@ export interface Program {
 async function fetchProgramMeta(ref: ProgramRef) {
   try {
     const env = await apiFetch<WpObjectEnvelope<WpProgram>>(`/wp/v2/web/program?id=${ref.postId}`, {
-      revalidate: 3600,
+      revalidate: false,
       tags: ["program", `program:${ref.slug}`],
     });
     return mapProgram(env.data, ref);
@@ -369,7 +369,7 @@ export interface FeaturedMovie {
 async function fetchPostSummary(postType: ProgramPostType, postId: number, tag: string) {
   const env = await apiFetch<{ title?: { rendered?: string }; excerpt?: { rendered?: string } }>(
     `/wp/v2/${postType}/${postId}?_fields=title,excerpt`,
-    { revalidate: 3600, tags: ["program", tag] },
+    { revalidate: false, tags: ["program", tag] },
   );
   return {
     title: decodeEntities(env.title?.rendered ?? "").trim(),
@@ -381,7 +381,7 @@ async function fetchPostSummary(postType: ProgramPostType, postId: number, tag: 
  *  confirmed reachable where `/wp/v2/web/program` is not. */
 async function fetchMediaUrl(mediaId: number): Promise<string> {
   const env = await apiFetch<{ source_url?: string }>(`/wp/v2/media/${mediaId}?_fields=source_url`, {
-    revalidate: 3600,
+    revalidate: false,
     tags: ["media", `media:${mediaId}`],
   });
   return env.source_url ?? "";

@@ -15,6 +15,12 @@ interface RawEditPost {
   id: number;
   slug: string;
   status: string;
+  /** The REAL permalink, computed by WordPress (category path, custom
+   *  overrides and all) — e.g. https://…/life-style/life-tips/news/<slug>/.
+   *  For an unpublished post it is the ?p= placeholder form. */
+  link?: string;
+  /** "2026-07-30T10:42:02" — site-local, no zone. */
+  date?: string;
   title: { raw?: string; rendered?: string };
   content: { raw?: string; rendered?: string };
   excerpt: { raw?: string; rendered?: string };
@@ -27,15 +33,64 @@ interface RawEditPost {
   _embedded?: {
     "wp:featuredmedia"?: {
       source_url?: string;
-      media_details?: { sizes?: { medium?: { source_url?: string }; thumbnail?: { source_url?: string } } };
+      // Open record rather than two named keys: WordPress generates whatever
+      // the theme registered (thumbnail / medium / medium_large / large / …),
+      // and naming only the two smallest is how the cover preview ended up
+      // pinned to a 300px image. See pickCoverUrl below.
+      media_details?: { sizes?: Record<string, { source_url?: string } | undefined> };
     }[];
     "wp:term"?: { id: number; taxonomy: string; name: string }[][];
   };
 }
 
+/** 2× the 704px reading column the cover renders into, so it stays sharp on the
+ *  HiDPI laptops the newsroom actually edits on. */
+const COVER_TARGET_W = 1408;
+
+/**
+ * The URL for the editor's COVER PREVIEW.
+ *
+ * This is not a thumbnail slot, though it was written as one — it asked for
+ * `medium` first, which is 300px on this install, and 300px stretched across
+ * the sheet's 704px column is exactly why the cover looked pixelated.
+ *
+ * Chosen by MEASURED WIDTH rather than by size name: WordPress generates
+ * whatever crops the theme registered, the names differ per install, and
+ * `large` simply does not exist for a lot of this library.
+ *
+ * Falling back to the original is safe, and not the gamble it looks like:
+ * WordPress only GENERATES a crop when the original exceeds it, so reaching
+ * that branch means no crop was ≥1408 — which means the original is itself
+ * modest. A genuine 4000px DSLR upload never gets here, because it will have
+ * produced a 1536 or 2048 crop for the first branch to find. Measured on a
+ * real post: the only crop was 768, and the original was 84 KB.
+ */
+function pickCoverUrl(media?: {
+  source_url?: string;
+  media_details?: { sizes?: Record<string, { source_url?: string; width?: number } | undefined> };
+}): string {
+  const sizes = Object.values(media?.media_details?.sizes ?? {}).filter(
+    (s): s is { source_url: string; width?: number } => typeof s?.source_url === "string" && s.source_url.length > 0,
+  );
+
+  // The SMALLEST crop that still covers a HiDPI render — not the largest, which
+  // would pull a 2048 file to paint 704 CSS pixels.
+  const big = sizes
+    .filter((s) => (s.width ?? 0) >= COVER_TARGET_W)
+    .sort((a, b) => (a.width ?? 0) - (b.width ?? 0))[0];
+  if (big) return big.source_url;
+
+  if (media?.source_url) return media.source_url;
+
+  return [...sizes].sort((a, b) => (b.width ?? 0) - (a.width ?? 0))[0]?.source_url ?? "";
+}
+
 export interface EditablePost {
   id: number;
   title: string;
+  /** Publish date, site-local ISO ("" for an undated draft) — the SEO
+   *  workbench's Google preview shows it the way Google would. */
+  date: string;
   /** Rendered HTML — do_blocks() output. Kept for previews and for the legacy
    *  TipTap editor; NOT what the Gutenberg canvas loads. */
   bodyHtml: string;
@@ -46,9 +101,16 @@ export interface EditablePost {
   excerpt: string;
   slug: string;
   status: string;
+  /** The post's live URL on the WordPress site, as WordPress computed it —
+   *  never derived here (the category path in it follows WP's own rules and
+   *  this site has custom permalink overrides). "" when WordPress didn't
+   *  return one; the preview control hides rather than guess. */
+  link: string;
   categoryIds: number[];
   tags: { id: number; name: string }[];
   featuredMedia: number;
+  /** URL for the cover PREVIEW on the editor sheet — a full-width crop, not a
+   *  thumbnail despite the name. See pickCoverUrl. */
   featuredThumb: string;
   /** Present only under context=edit. A protected post returns its real
    *  password here, which is why this whole object is admin-only. */
@@ -84,7 +146,7 @@ export async function getPostForEdit(id: number): Promise<EditablePost | null> {
   const { data } = await adminFetch<RawEditPost>(`/wp/v2/posts/${id}`, {
     query: {
       context: "edit",
-      _fields: "id,slug,status,title,content,excerpt,categories,tags,featured_media,password,sticky,meta,_links,_embedded",
+      _fields: "id,date,slug,status,link,title,content,excerpt,categories,tags,featured_media,password,sticky,meta,_links,_embedded",
       _embed: "wp:featuredmedia,wp:term",
     },
   });
@@ -96,11 +158,13 @@ export async function getPostForEdit(id: number): Promise<EditablePost | null> {
   return {
     id: data.id,
     title: decodeEntities(data.title?.raw ?? "").trim(),
+    date: data.date ?? "",
     bodyHtml: data.content?.rendered ?? "",
     bodyRaw: data.content?.raw ?? "",
     excerpt: decodeEntities(data.excerpt?.raw ?? "").trim(),
     slug: data.slug ?? "",
     status: data.status,
+    link: data.link ?? "",
     password: typeof data.password === "string" ? data.password : "",
     sticky: data.sticky === true,
     categoryIds: data.categories ?? [],
@@ -108,17 +172,23 @@ export async function getPostForEdit(id: number): Promise<EditablePost | null> {
       .filter((t) => t.taxonomy === "post_tag")
       .map((t) => ({ id: t.id, name: decodeEntities(t.name).trim() })),
     featuredMedia: data.featured_media ?? 0,
-    featuredThumb:
-      media?.media_details?.sizes?.medium?.source_url ??
-      media?.media_details?.sizes?.thumbnail?.source_url ??
-      media?.source_url ??
-      "",
+    featuredThumb: pickCoverUrl(media),
     seo: {
       title: metaStr(data.meta, "_yoast_wpseo_title"),
       description: metaStr(data.meta, "_yoast_wpseo_metadesc"),
       focus: metaStr(data.meta, "_yoast_wpseo_focuskw"),
     },
   };
+}
+
+/** What a write echoes back. `link` is the permalink WordPress computed for the
+ *  state it just stored — on a publish, the final pretty URL — which is how the
+ *  editor's preview control gets the live-site address without a reload. */
+export interface SavedPost {
+  id: number;
+  status: string;
+  slug: string;
+  link?: string;
 }
 
 /** Update an existing post. WordPress accepts POST on the item route as an update.
@@ -135,11 +205,11 @@ export async function getPostForEdit(id: number): Promise<EditablePost | null> {
  *  — so a rejected write loses every other edit in the payload (title, body,
  *  categories, SEO), which is what makes this worth a second round trip rather
  *  than a comment. It only fires when a password is actually being set. */
-export async function updatePost(id: number, patch: PostWrite): Promise<{ id: number; status: string; slug: string }> {
+export async function updatePost(id: number, patch: PostWrite): Promise<SavedPost> {
   if (patch.password && patch.sticky === false) {
     await adminFetch(`/wp/v2/posts/${id}`, { method: "POST", body: { sticky: false } });
   }
-  const { data } = await adminFetch<{ id: number; status: string; slug: string }>(`/wp/v2/posts/${id}`, {
+  const { data } = await adminFetch<SavedPost>(`/wp/v2/posts/${id}`, {
     method: "POST",
     body: patch,
   });
@@ -147,8 +217,8 @@ export async function updatePost(id: number, patch: PostWrite): Promise<{ id: nu
 }
 
 /** Create a new post. Defaults to draft unless the caller sets a status. */
-export async function createPost(fields: PostWrite): Promise<{ id: number; status: string; slug: string }> {
-  const { data } = await adminFetch<{ id: number; status: string; slug: string }>(`/wp/v2/posts`, {
+export async function createPost(fields: PostWrite): Promise<SavedPost> {
+  const { data } = await adminFetch<SavedPost>(`/wp/v2/posts`, {
     method: "POST",
     body: { status: "draft", ...fields },
   });

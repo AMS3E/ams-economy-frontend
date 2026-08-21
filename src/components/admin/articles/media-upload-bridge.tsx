@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { addFilter } from "@wordpress/hooks";
-import MediaPicker, { type PickedMedia } from "../MediaPicker";
+import MediaPicker, { type MediaKind, type PickedMedia } from "../MediaPicker";
 import { uploadImageFile } from "../upload-client";
 
 // THE TWO HALVES that connect WordPress's blocks to OUR media library. Both are
@@ -63,18 +63,32 @@ interface MediaUploadProps {
   onSelect?: (media: WpMediaShape | WpMediaShape[]) => void;
   multiple?: boolean;
   title?: string;
+  /** Type roots from the block ('image' | 'video' | 'audio'; the File block
+   *  passes none). MediaPlaceholder also accepts full mimes, so match both. */
+  allowedTypes?: string[];
 }
 
-function AmsMediaUpload({ render, onSelect, multiple, title }: MediaUploadProps) {
+const PICKER_TITLE: Record<MediaKind, string> = { image: "Choose image", video: "Choose video", audio: "Choose audio" };
+
+function AmsMediaUpload({ render, onSelect, multiple, title, allowedTypes }: MediaUploadProps) {
   const [open, setOpen] = useState(false);
+
+  // What the block can USE is what the picker may offer. Before this was
+  // threaded through, every block's dialog showed all four tabs — which is how
+  // an mp3 ended up inside an Image block as a broken <img>.
+  const kinds = (["image", "video", "audio"] as MediaKind[]).filter((k) =>
+    allowedTypes?.some((t) => t === k || t.startsWith(`${k}/`)),
+  );
+  const resolved = kinds.length ? kinds : (["image", "video", "audio"] as MediaKind[]);
 
   return (
     <>
       {render({ open: () => setOpen(true) })}
       {open ? (
         <MediaPicker
-          title={title ?? (multiple ? "Add images" : "Choose image")}
+          title={title ?? (multiple ? "Add images" : kinds.length === 1 ? PICKER_TITLE[kinds[0]] : "Choose media")}
           multiple={multiple}
+          kinds={resolved}
           onClose={() => setOpen(false)}
           onPick={(m) => {
             onSelect?.(toWpMedia(m));
@@ -126,7 +140,7 @@ export async function amsMediaUpload({
       caption: "",
       title: file.name,
       mime: file.type,
-      type: "image",
+      type: file.type.split("/")[0] || "file",
     });
     // Report after EVERY file: a four-image drop shows each one as it lands
     // instead of nothing for twenty seconds. onFileChange is idempotent — it

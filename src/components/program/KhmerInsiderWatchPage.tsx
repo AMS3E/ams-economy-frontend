@@ -5,6 +5,7 @@ import EpisodePosterPlayer from "./EpisodePosterPlayer";
 import KhmerInsiderSidebar from "./KhmerInsiderSidebar";
 import type { EpisodePreview } from "@/lib/episode";
 import type { RailEpisode } from "@/lib/episodes";
+import type { Video } from "@/lib/api/video";
 import type { Program } from "@/lib/programs";
 
 const shell = css({
@@ -17,10 +18,16 @@ const shell = css({
 const columns = css({
   display: "grid",
   gridTemplateColumns: { base: "minmax(0, 1fr)", lg: "minmax(0, 1fr) 331px" },
+  gridTemplateAreas: {
+    base: `"player" "sidebar" "extra"`,
+    lg: `"player sidebar" "extra sidebar"`,
+  },
   gap: { base: "24px", lg: "12px" },
   alignItems: "start",
 });
-const main = css({ minWidth: 0 });
+const playerArea = css({ gridArea: "player", minWidth: 0 });
+const sidebarArea = css({ gridArea: "sidebar", minWidth: 0 });
+const extraArea = css({ gridArea: "extra", minWidth: 0 });
 const videoTitle = css({
   margin: "12px 0 0",
   fontWeight: 400,
@@ -57,6 +64,7 @@ export default function KhmerInsiderWatchPage({
   programSlug,
   program,
   episode,
+  programVideo,
   episodes,
   videoCover,
   currentEpisode,
@@ -64,6 +72,7 @@ export default function KhmerInsiderWatchPage({
   programSlug: string;
   program: Program;
   episode: EpisodePreview | null;
+  programVideo: Video | null;
   episodes: RailEpisode[];
   videoCover: string;
   currentEpisode?: RailEpisode | null;
@@ -82,7 +91,7 @@ export default function KhmerInsiderWatchPage({
   return (
     <div className={shell}>
       <div className={columns}>
-        <div className={main}>
+        <div className={playerArea}>
           {episode?.video ? (
             <EpisodePlayer video={episode.video} title={title} />
           ) : current ? (
@@ -91,12 +100,26 @@ export default function KhmerInsiderWatchPage({
               thumbnail={videoCover || program.backdrop}
               title={current.title}
             />
+          ) : programVideo ? (
+            <EpisodePlayer video={programVideo} title={title} />
           ) : (
             <EpisodePlayer video={null} title={title} />
           )}
           <h1 className={videoTitle}>{title}</h1>
           {facts && <p className={videoMeta}>{facts}</p>}
+        </div>
 
+        <div className={sidebarArea}>
+          <KhmerInsiderSidebar
+            programSlug={programSlug}
+            episodes={episodes}
+            title={program.title}
+            schedule={program.schedule}
+            currentEpisodeId={current?.id}
+          />
+        </div>
+
+        <div className={extraArea}>
           <section className={`${box} ${descriptionBox}`}>
             <h2 className={boxTitle}>Description</h2>
             {description.length ? description.map((paragraph, index) => <p className={copy} key={index}>{paragraph}</p>) : <p className={copy}>Khmer Insider</p>}
@@ -117,14 +140,6 @@ export default function KhmerInsiderWatchPage({
             </div>
           </section>
         </div>
-
-        <KhmerInsiderSidebar
-          programSlug={programSlug}
-          episodes={episodes}
-          title={program.title}
-          schedule={program.schedule}
-          currentEpisodeId={current?.id}
-        />
       </div>
     </div>
   );

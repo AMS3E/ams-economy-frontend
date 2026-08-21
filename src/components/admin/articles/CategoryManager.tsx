@@ -5,9 +5,10 @@ import { css, cx } from "@/styled-system/css";
 import { ac } from "../tokens";
 import { Icon } from "../icons";
 import { SearchInput } from "../Dropdown";
-import { Surface, Button, Input, Table, Th, Td, Tr, TableFooter, EmptyState } from "../ui";
+import { Surface, PageHeader, Button, Input, Table, Th, Td, Tr, TableFooter, EmptyState } from "../ui";
 import { Bar, SkeletonKeyframes } from "../Skeleton";
 import RefreshButton from "../RefreshButton";
+import ArticlesTabs from "./ArticlesTabs";
 import ConfirmDialog from "../ConfirmDialog";
 import type { CategoryNode } from "@/lib/admin/categories";
 import { createCategory, deleteCategory, renameCategory, setCategoryParent } from "@/lib/admin/screen-actions";
@@ -232,29 +233,44 @@ export default function CategoryManager({
   };
 
   return (
-    <div className={css({ marginTop: "20px" })}>
-      <div className={css({ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" })}>
-        <SearchInput placeholder="Search categories…" value={search} onValueChange={setSearch} width="300px" />
-        <span className={css({ fontSize: "12.5px", whiteSpace: "nowrap" })} style={{ color: ac.muted }}>
-          {loading ? "Loading…" : `${categories.length} categories · ${tops} top-level`}
-        </span>
-        <div className={css({ flex: 1 })} />
-        {collapsed.size > 0 ? <Button onClick={() => setCollapsed(new Set())}>Expand all</Button> : null}
-        <RefreshButton fetchedAt={fetchedAt} refreshing={refreshing} onRefresh={onRefresh} />
-        <Button
-          variant="primary"
-          icon="plus"
-          onClick={() => {
-            setAdding((v) => !v);
-            closeRow();
-          }}
-        >
-          New category
-        </Button>
-      </div>
+    <div>
+      {/* Title band, then everything else in one panel — the Articles list's
+          shape. No `trail`: the tab strip below already says where you are. */}
+      <PageHeader
+        title="Categories"
+        sub={loading ? "Loading…" : `${categories.length} categories · ${tops} top-level`}
+        actions={
+          <>
+            <RefreshButton fetchedAt={fetchedAt} refreshing={refreshing} onRefresh={onRefresh} />
+            <Button
+              variant="primary"
+              icon="plus"
+              onClick={() => {
+                setAdding((v) => !v);
+                closeRow();
+              }}
+            >
+              New category
+            </Button>
+          </>
+        }
+      />
+
+      <Surface>
+        {/* The tab strip is rendered HERE rather than by the page, so it can sit
+            inside the panel and carry this screen's search in its trailing
+            slot — same row, one rule under both. */}
+        <ArticlesTabs
+          trailing={
+            <>
+              <SearchInput placeholder="Search categories…" value={search} onValueChange={setSearch} width="260px" />
+              {collapsed.size > 0 ? <Button onClick={() => setCollapsed(new Set())}>Expand all</Button> : null}
+            </>
+          }
+        />
 
       {adding ? (
-        <Surface className={css({ marginTop: "12px", padding: "14px 16px" })}>
+        <div className={css({ padding: "14px 22px" })} style={{ borderBottom: `1px solid ${ac.border}` }}>
         <div className={css({ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" })}>
           <Input
             autoFocus
@@ -288,16 +304,15 @@ export default function CategoryManager({
             Cancel
           </Button>
         </div>
-        </Surface>
+        </div>
       ) : null}
 
       {error ? (
-        <p role="alert" className={css({ fontSize: "12.5px", marginTop: "12px", padding: "9px 11px", borderRadius: "9px" })} style={{ color: ac.danger, background: ac.dangerTint, border: `1px solid ${ac.danger}` }}>
+        <p role="alert" className={css({ fontSize: "12.5px", padding: "10px 22px" })} style={{ color: ac.danger, background: ac.dangerTint, borderBottom: `1px solid ${ac.danger}` }}>
           {error}
         </p>
       ) : null}
 
-      <Surface style={{ marginTop: "16px", overflow: "hidden" }}>
         <Table>
           <thead>
             <tr>

@@ -10,7 +10,9 @@ import { bffAuthRequired, bffError } from "@/lib/admin/bff";
 // keep the httpOnly token out of browser JS, and normalize the filter params.
 // The browser's TanStack Query cache still dedupes and serves back/forward.
 
-const PER_PAGE = 10;
+// 20 rows a page (owner's call). ArticlesScreen mirrors this for its
+// skeleton row count and its "1-20 of N" footer — change both together.
+const PER_PAGE = 20;
 
 /** Date-preset key → ISO lower bound, truncated to LOCAL MIDNIGHT so every
  *  request within a day produces the same string — an intra-day-stable cache

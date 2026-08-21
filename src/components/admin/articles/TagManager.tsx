@@ -5,9 +5,10 @@ import { useState } from "react";
 import { css } from "@/styled-system/css";
 import { ac } from "../tokens";
 import { SearchInput } from "../Dropdown";
-import { Surface, Button, Input, Table, Th, Td, Tr, TableFooter, EmptyState } from "../ui";
+import { Surface, PageHeader, Button, Input, Table, Th, Td, Tr, TableFooter, EmptyState } from "../ui";
 import { Bar, SkeletonKeyframes } from "../Skeleton";
 import RefreshButton from "../RefreshButton";
+import ArticlesTabs from "./ArticlesTabs";
 import ConfirmDialog from "../ConfirmDialog";
 import type { TagListResult } from "@/lib/admin/tags";
 import { createTag, deleteTag } from "@/lib/admin/screen-actions";
@@ -95,20 +96,36 @@ export default function TagManager({
   const end = start === 0 ? 0 : start + items.length - 1;
 
   return (
-    <div className={css({ marginTop: "20px" })}>
-      <div className={css({ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" })}>
-        <form onSubmit={onSearch} className={css({ display: "flex" })}>
-          <SearchInput placeholder="Search tags…" name="q" defaultValue={query.search} width="300px" />
-        </form>
-        <div className={css({ flex: 1 })} />
-        <RefreshButton fetchedAt={fetchedAt} refreshing={refreshing} onRefresh={onRefresh} />
-        <Button variant="primary" icon="plus" onClick={() => setAdding((v) => !v)}>
-          New tag
-        </Button>
-      </div>
+    <div>
+      {/* Title band, then everything else in one panel — the Articles list's
+          shape. No `trail`: the tab strip below already says where you are. */}
+      <PageHeader
+        title="Tags"
+        sub={loading ? "Loading…" : `${total.toLocaleString("en-US")} ${total === 1 ? "tag" : "tags"}`}
+        actions={
+          <>
+            <RefreshButton fetchedAt={fetchedAt} refreshing={refreshing} onRefresh={onRefresh} />
+            <Button variant="primary" icon="plus" onClick={() => setAdding((v) => !v)}>
+              New tag
+            </Button>
+          </>
+        }
+      />
+
+      <Surface>
+        {/* The tab strip is rendered HERE rather than by the page, so it can sit
+            inside the panel and carry this screen's search in its trailing
+            slot — same row, one rule under both. */}
+        <ArticlesTabs
+          trailing={
+            <form onSubmit={onSearch} className={css({ display: "flex" })}>
+              <SearchInput placeholder="Search tags…" name="q" defaultValue={query.search} width="260px" />
+            </form>
+          }
+        />
 
       {adding ? (
-        <Surface style={{ marginTop: "12px", padding: "14px 16px" }}>
+        <div className={css({ padding: "14px 22px" })} style={{ borderBottom: `1px solid ${ac.border}` }}>
           <div className={css({ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" })}>
             <Input
               autoFocus
@@ -126,16 +143,15 @@ export default function TagManager({
             </Button>
             <Button onClick={() => { setAdding(false); setError(null); }}>Cancel</Button>
           </div>
-        </Surface>
+        </div>
       ) : null}
 
       {error ? (
-        <p role="alert" className={css({ fontSize: "12.5px", marginTop: "12px", padding: "9px 11px", borderRadius: "9px" })} style={{ color: ac.danger, background: ac.dangerTint, border: `1px solid ${ac.danger}` }}>
+        <p role="alert" className={css({ fontSize: "12.5px", padding: "10px 22px" })} style={{ color: ac.danger, background: ac.dangerTint, borderBottom: `1px solid ${ac.danger}` }}>
           {error}
         </p>
       ) : null}
 
-      <Surface style={{ marginTop: "16px", overflow: "hidden" }}>
         <div style={{ opacity: fetching && !loading ? 0.55 : 1, transition: "opacity .15s" }}>
           <Table>
             <thead>

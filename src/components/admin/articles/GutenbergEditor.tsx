@@ -185,7 +185,8 @@ export default function GutenbergEditor({
   register,
   previewHref,
   header,
-  footer,
+  sidebar,
+  belowDocument,
 }: {
   /** The post's STORED body — `content.raw`, i.e. block markup. Empty for a
    *  new post. (Never content.rendered: that is do_blocks() output, and
@@ -195,18 +196,31 @@ export default function GutenbergEditor({
   /** Where "Preview in new tab" goes. Absent (a post with no URL yet) hides
    *  the control rather than opening something that 404s. */
   previewHref?: string;
-  /** The document's own chrome, rendered INSIDE the canvas column: cover image
-   *  and title above the blocks, excerpt below. They belong to ArticleEditor
-   *  (which owns their refs and reads them on save) and are passed in rather
-   *  than moved, because the canvas column is the only place they can live now
-   *  that the inspector docks beside it. */
+  /** The document's own chrome, rendered INSIDE the canvas column: the cover
+   *  image and the title, above the blocks. They belong to ArticleEditor (which
+   *  owns the title's ref and reads it on save) and are passed in rather than
+   *  moved, because the canvas column is the only place they can live now that
+   *  the sidebar docks beside it. */
   header?: React.ReactNode;
-  footer?: React.ReactNode;
+  /** The `Post` tab's contents — the ARTICLE's settings (status, categories,
+   *  tags, excerpt, SEO), owned by ArticleEditor. They share the docked column
+   *  with WordPress's block inspector, which is the `Block` tab. Omit and the
+   *  sidebar is block settings alone. */
+  sidebar?: React.ReactNode;
+  /** Rendered in the document COLUMN, below the sheet — wp-admin's metabox
+   *  position. It is NOT on the sheet, because it never renders in the
+   *  published body (same reasoning as the excerpt). */
+  belowDocument?: React.ReactNode;
 }) {
   ensureBlocks();
 
   const [blocks, setBlocks] = useState<Block[]>(() => (initialContent ? parse(initialContent) : []));
-  const [showInspector, setShowInspector] = useState(false);
+  // ONE docked column, two tabs — wp-admin's anatomy, so the editors already
+  // know where things are. Open by default: the point of folding the old
+  // Settings screen in here was that a writer can SEE the status and the
+  // categories of the thing they are writing, not go and find them.
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("post");
   const [inserterOpen, setInserterOpen] = useState(false);
   const [device, setDevice] = useState<Device>("desktop");
   const dirtyRef = useRef(false);
@@ -356,7 +370,7 @@ export default function GutenbergEditor({
                 aria-expanded={inserterOpen}
                 aria-label="Add block"
                 title="Add block"
-                className={css({ display: "flex", alignItems: "center", justifyContent: "center", width: "40px", height: "40px", flex: "none", borderRadius: "8px", cursor: "pointer", border: "none", color: "#fff", transition: "transform .12s" })}
+                className={css({ display: "flex", alignItems: "center", justifyContent: "center", width: "40px", height: "40px", flex: "none", cursor: "pointer", border: "none", color: "var(--colors-admin-accent-fg)", transition: "transform .12s" })}
                 style={{ background: ac.accent, transform: inserterOpen ? "rotate(45deg)" : "none" }}
               >
                 <Icon name="plus" size={16} strokeWidth={2.2} />
@@ -426,8 +440,18 @@ export default function GutenbergEditor({
                 ) : null}
               </div>
 
-              <button type="button" onClick={() => setShowInspector((v) => !v)} aria-pressed={showInspector} className={bandBtnClass} style={{ background: showInspector ? ac.canvas : "transparent", border: `1px solid ${ac.border}`, color: showInspector ? ac.text : ac.muted }}>
-                <Icon name="settings" size={15} strokeWidth={1.9} />Block settings
+              {/* One toggle for the whole column, not a "Block settings"
+                  button: the panel it opens now holds the article's own
+                  settings too, and the tabs inside it choose between them. */}
+              <button
+                type="button"
+                onClick={() => setSidebarOpen((v) => !v)}
+                aria-pressed={sidebarOpen}
+                aria-label={sidebarOpen ? "Hide the settings sidebar" : "Show the settings sidebar"}
+                className={bandBtnClass}
+                style={{ background: sidebarOpen ? ac.canvas : "transparent", border: `1px solid ${ac.border}`, color: sidebarOpen ? ac.text : ac.muted }}
+              >
+                <Icon name="settings" size={15} strokeWidth={1.9} />Settings
               </button>
             </div>
 
@@ -479,19 +503,63 @@ export default function GutenbergEditor({
                         </BlockTools>
                       </div>
                     </div>
-                    {footer}
+                    {belowDocument ? <div className={css({ marginTop: "28px" })}>{belowDocument}</div> : null}
                   </div>
                 </div>
               </CanvasSelectionClearer>
 
-              {showInspector ? (
+              {sidebarOpen ? (
                 // Sticky rather than a fixed-height scroller: this admin scrolls
                 // the DOCUMENT (the shell is min-height:100vh, not a 100vh
                 // app frame), so a full-height flex child would have no height
                 // to fill. Sticky gives the docked feel without changing the
                 // shell's scroll model.
-                <aside className={inspectorClass} style={{ background: ac.surface, borderLeft: `1px solid ${ac.border}` }}>
-                  <BlockInspector />
+                <aside className={sidebarClass} style={{ background: ac.surface, borderLeft: `1px solid ${ac.border}` }}>
+                  <div className={sidebarTabsClass} style={{ background: ac.surface, borderBottom: `1px solid ${ac.border}` }}>
+                    <div className={css({ display: "flex", gap: "2px" })} role="tablist" aria-label="Editor settings">
+                      {SIDEBAR_TABS.map((t) => {
+                        const on = sidebarTab === t.key;
+                        return (
+                          <button
+                            key={t.key}
+                            type="button"
+                            role="tab"
+                            aria-selected={on}
+                            aria-controls={`ams-sidebar-${t.key}`}
+                            onClick={() => setSidebarTab(t.key)}
+                            className={sidebarTabClass}
+                            // Underline rather than a filled pill: the tabs sit
+                            // ON the panel they label, so a fill would read as a
+                            // second surface stacked on the first.
+                            style={{ color: on ? ac.text : ac.muted, boxShadow: on ? `inset 0 -2px 0 ${ac.accent}` : "none" }}
+                          >
+                            {t.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className={css({ flex: 1 })} />
+                    <button
+                      type="button"
+                      onClick={() => setSidebarOpen(false)}
+                      aria-label="Hide the settings sidebar"
+                      className={sidebarCloseClass}
+                      style={{ color: ac.muted }}
+                    >
+                      <Icon name="x" size={13} strokeWidth={2.2} />
+                    </button>
+                  </div>
+
+                  {/* Both panels stay MOUNTED and toggle with `display`.
+                      Switching to Block and back must not scroll the Post panel
+                      to the top, collapse its sections, or make WP's inspector
+                      rebuild every control it had just drawn. */}
+                  <div id="ams-sidebar-post" role="tabpanel" aria-label="Post settings" style={{ display: sidebarTab === "post" ? "block" : "none" }}>
+                    {sidebar}
+                  </div>
+                  <div id="ams-sidebar-block" role="tabpanel" aria-label="Block settings" style={{ display: sidebarTab === "block" ? "block" : "none" }}>
+                    <BlockInspector />
+                  </div>
                 </aside>
               ) : null}
             </div>
@@ -603,12 +671,16 @@ const documentColClass = css({
 
 /** The page. Horizontal padding is the 32px the document column used to carry,
  *  so the reading measure is unchanged (704px at desktop) — what moved is only
- *  what sits behind it. Deliberately NO `overflow: hidden` despite the radius:
- *  WP's drag handles, the block appender and the inserter's drop indicator all
- *  paint outside the block list, and clipping them breaks the affordances. */
+ *  what sits behind it. Deliberately NO `overflow: hidden`: WP's drag handles,
+ *  the block appender and the inserter's drop indicator all paint outside the
+ *  block list, and clipping them breaks the affordances. */
 const sheetClass = css({
-  borderRadius: "12px",
+  // Square corners, on the owner's call. A rounded sheet read as a CARD in the
+  // tool; a sharp one reads as a sheet of paper, which is what it is.
   padding: "32px 32px 56px",
+  // A near-empty document still fills the viewport (owner request): 112px of
+  // sticky chrome + the area's 32px top gutter + a matching 32px at the bottom.
+  minHeight: "calc(100vh - 176px)",
 });
 
 /** The block library, docked left. Wider than the inspector because it holds a
@@ -629,15 +701,68 @@ const inserterPanelClass = css({
   flexDirection: "column",
 });
 
-/** Docked block settings. 300px, its own scroll, sticky below the band. */
-const inspectorClass = css({
-  width: "300px",
+/** The two tabs, in wp-admin's order.
+ *
+ *  Selecting a block deliberately does NOT switch to `Block`. wp-admin can get
+ *  away with it because its sidebar holds little the writer is mid-way through;
+ *  ours holds a category filter with text in it and a tag typeahead with a menu
+ *  open, and yanking the panel out from under either is worse than one click. */
+type SidebarTab = "post" | "block";
+const SIDEBAR_TABS: { key: SidebarTab; label: string }[] = [
+  { key: "post", label: "Post" },
+  { key: "block", label: "Block" },
+];
+
+/** The docked sidebar: the article's settings and WP's block inspector sharing
+ *  one column. 320px — 20 wider than the inspector alone was, because the Post
+ *  tab carries a category list with counts and a 0/160 counter beside a label,
+ *  and both were wrapping at 300. Its own scroll, sticky below the band. */
+const sidebarClass = css({
+  width: "320px",
   flex: "none",
   position: "sticky",
   top: "112px", // 56px app bar + 56px band
   height: "calc(100vh - 112px)",
   overflowY: "auto",
-  paddingBottom: "24px",
+});
+
+/** The tab strip, sticky INSIDE the sidebar's own scroller — the Post panel is
+ *  taller than the viewport with two sections open, and tabs you have to scroll
+ *  back up to reach are tabs nobody uses. */
+const sidebarTabsClass = css({
+  position: "sticky",
+  top: 0,
+  zIndex: 2,
+  display: "flex",
+  alignItems: "center",
+  padding: "0 8px 0 6px",
+  height: "44px",
+  flex: "none",
+});
+
+const sidebarTabClass = css({
+  height: "43px",
+  padding: "0 12px",
+  fontSize: "13px",
+  fontWeight: 600,
+  cursor: "pointer",
+  border: "none",
+  background: "transparent",
+  transition: "color .12s, box-shadow .12s",
+});
+
+const sidebarCloseClass = css({
+  width: "28px",
+  height: "28px",
+  borderRadius: "7px",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  cursor: "pointer",
+  border: "none",
+  background: "transparent",
+  flex: "none",
+  _hover: { background: ac.surfaceHover },
 });
 
 // The canvas inherits WP's editor styles (imported above); these are OUR

@@ -8,6 +8,7 @@ import { css } from "@/styled-system/css";
 import { ac, type Status } from "../tokens";
 import { Icon } from "../icons";
 import { StatusPill } from "../ui";
+import LegacySiteChip, { startLegacyRefresh } from "../LegacySiteChip";
 import ConfirmDialog from "../ConfirmDialog";
 import { useProgramEdit } from "./ProgramEditContext";
 import { trashProgramAction } from "@/lib/admin/program-actions";
@@ -55,6 +56,11 @@ export default function ProgramTopBar() {
       setDeleteError(res.error ?? "Couldn't trash the program.");
       return;
     }
+    // A published program leaves its cached page + listings behind on the
+    // legacy site — same ghost problem as trashing an article (afa 1.17.1
+    // reconstructs the pre-trash URL). Fire-and-forget: the purge survives the
+    // client-side navigation below even though no chip is mounted to show it.
+    if (published) startLegacyRefresh(program.id);
     // The action busted the BFF tag; drop the client list cache too, or the
     // grid would paint the trashed program again from its 30min entry.
     // `deleting` stays true — we're navigating away, not returning to the form.
@@ -78,6 +84,7 @@ export default function ProgramTopBar() {
             <span className={css({ fontSize: "12.5px", whiteSpace: "nowrap" })} style={{ color: saveMsg?.kind === "err" ? ac.danger : ac.faint }}>
               {saving ? "Saving…" : saveMsg?.text ?? ""}
             </span>
+            <LegacySiteChip postId={program.id} />
           </>
         )}
         <div className={css({ flex: 1 })} />
@@ -160,7 +167,7 @@ export default function ProgramTopBar() {
           type="button"
           disabled={busy || !edit}
           onClick={edit?.save}
-          className={css({ height: "34px", padding: "0 18px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", border: "none", color: "#fff", boxShadow: ac.shadowSm, transition: "background .12s", _hover: { background: ac.accentHover } })}
+          className={css({ height: "34px", padding: "0 18px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", border: "none", color: "var(--colors-admin-accent-fg)", boxShadow: ac.shadowSm, transition: "background .12s", _hover: { background: ac.accentHover } })}
           style={{ background: ac.accent, opacity: busy ? 0.7 : 1 }}
         >
           {saving ? "Saving…" : "Save"}

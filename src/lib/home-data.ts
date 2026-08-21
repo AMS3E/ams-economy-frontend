@@ -310,7 +310,7 @@ export interface FooterLink {
  */
 export const footerCols: { heading: string; links: FooterLink[] }[] = [
   {
-    heading: "AMS INFOTAINMENT",
+    heading: "AMS ECONOMY",
     links: [
       { label: "តារាល្បីៗ", href: "/celebrity" },
       { label: "ភាពយន្តនិងតន្ត្រី", href: "/movie-and-music" },
@@ -324,8 +324,8 @@ export const footerCols: { heading: string; links: FooterLink[] }[] = [
     heading: "បណ្តាញព័ត៌មានផ្សេងៗទៀតពី AMS GROUP",
     links: [
       { label: "AMS Education", href: "https://education.ams.com.kh", external: true },
-      { label: "AMS Economy", href: "https://economy.ams.com.kh", external: true },
-      { label: "AMS Infotainment", href: "/" },
+      { label: "AMS Economy", href: "/" },
+      { label: "AMS Infotainment", href: "https://infotainment.ams.com.kh", external: true },
       { label: "AMS Khmer Civilization", href: "https://ams.com.kh/khmercivilization", external: true },
       { label: "AMS Central", href: "https://ams.com.kh/central", external: true },
       { label: "AMS Sport", href: "https://ams.com.kh/sports", external: true },

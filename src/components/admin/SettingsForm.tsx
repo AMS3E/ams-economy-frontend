@@ -70,7 +70,7 @@ export default function SettingsForm({
   const mono = css({ fontFamily: "ui-monospace, monospace", fontSize: "12.5px" });
 
   return (
-    <div className={css({ padding: "28px 32px 48px", maxWidth: "760px" })}>
+    <div className={css({ maxWidth: "760px" })}>
       <PageHeader trail={[{ label: "Site" }, { label: "Settings" }]} title="Settings" sub="Site-wide configuration." />
 
       <div className={css({ display: "flex", flexDirection: "column", gap: "16px", marginTop: "20px" })}>

@@ -14,8 +14,8 @@ const MIN_LOADING_MS = 400;
 
 type Params = { params: Promise<{ slug: string; episode: string }> };
 
-// ISR: revalidate hourly; on-demand invalidation via /api/revalidate.
-export const revalidate = 3600;
+// ISR without a timer; WordPress episode/program saves invalidate fetch tags.
+export const revalidate = false;
 
 // Episode pages are generated on first visit, then cached.
 export function generateStaticParams() {
@@ -41,6 +41,7 @@ export default async function EpisodePageRoute({ params }: Params) {
       programSlug={slug}
       program={data.program}
       episode={data.episode}
+      programVideo={data.programVideo}
       episodes={data.episodes}
       videoCover={data.videoCover}
       currentEpisode={data.current}

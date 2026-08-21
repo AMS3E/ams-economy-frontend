@@ -395,7 +395,7 @@ export async function createShowForProgram(movie: { id: number; title: string; s
 }
 
 /** Episode create-time field set — mirrors what wp-admin's episode editor
- *  collects (see docs/How create home page on Website v1.pdf) using the meta
+ *  collects (see docs/api/how-to-create-home-page-v1.pdf) using the meta
  *  the plugin registered for REST (≥1.7.1). */
 export interface EpisodeCreateWrite {
   showId: number;

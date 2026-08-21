@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import { css } from "@/styled-system/css";
+import { css, cx } from "@/styled-system/css";
 import { ac } from "@/components/admin/tokens";
+import { ADMIN_FONT_STACK, adminFont } from "@/components/admin/font";
 import AdminSidebar from "@/components/admin/AdminSidebar";
-import AdminTopBar from "@/components/admin/AdminTopBar";
 import QueryProvider from "@/components/admin/QueryProvider";
 import { requireSession, type SessionUser } from "@/lib/auth/session";
 
@@ -49,14 +49,18 @@ export default async function AdminLayout({
   return (
     <QueryProvider>
       <div
-        className={css({ display: "flex", minHeight: "100vh", fontSize: "14px" })}
-        style={{ background: ac.canvas, color: ac.text }}
+        // adminFont.variable declares --font-admin on this subtree only; the
+        // stack then puts it ahead of the site-wide Battambang, which stays on
+        // as the Khmer fallback. The public site never sees either.
+        className={cx(adminFont.variable, css({ display: "flex", minHeight: "100vh", fontSize: "14px" }))}
+        style={{ background: ac.canvas, color: ac.text, fontFamily: ADMIN_FONT_STACK }}
       >
-        <AdminSidebar capabilities={user.capabilities} />
-        <div className={css({ flex: "1", minWidth: 0, display: "flex", flexDirection: "column" })}>
-          <AdminTopBar user={toSidebarUser(user)} />
-          {children}
-        </div>
+        {/* No top bar. The theme control and the account menu it carried now
+            live in the sidebar foot, so the content column starts at the very
+            top of the viewport — which is what lets each screen's PageHeader be
+            the first thing on the page. */}
+        <AdminSidebar capabilities={user.capabilities} user={toSidebarUser(user)} />
+        <div className={css({ flex: "1", minWidth: 0, display: "flex", flexDirection: "column" })}>{children}</div>
       </div>
     </QueryProvider>
   );

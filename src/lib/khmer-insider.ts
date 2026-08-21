@@ -1,5 +1,7 @@
 import { getEpisodePreview } from "./episode";
 import { fetchEpisodeRail, fetchLegacyEpisodeMedia, type RailEpisode } from "./episodes";
+import type { Video } from "./api/video";
+import { CURATED_PROGRAMS } from "./program-curation";
 import { getFeaturedMovie, getProgram, routedProgram, type Program } from "./programs";
 import { notFound } from "next/navigation";
 
@@ -44,12 +46,14 @@ const WATCH_PROGRAM_OVERRIDES: Record<string, WatchProgramOverrides> = {
 };
 
 const hrefSlug = (href: string) => href.split("/").filter(Boolean).at(-1)?.toLowerCase() ?? "";
+const labelSlug = (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, "");
 
 export interface ProgramWatchData {
   program: Program;
   episodes: RailEpisode[];
   current: RailEpisode | null;
   episode: Awaited<ReturnType<typeof getEpisodePreview>>;
+  programVideo: Video | null;
   videoCover: string;
 }
 
@@ -85,12 +89,15 @@ export async function getProgramWatchData(
   };
   const wanted = episodeSlug?.toLowerCase();
   const current = wanted
-    ? rail.episodes.find(item => hrefSlug(item.href) === wanted) ?? null
+    ? rail.episodes.find(item =>
+        hrefSlug(item.href) === wanted || String(item.id) === wanted || labelSlug(item.label) === wanted,
+      ) ?? null
     : rail.episodes[0] ?? null;
+  const programPageHref = CURATED_PROGRAMS.find(item => item.postId === ref.postId)?.wpHref;
 
   const [preview, legacyMedia] = current
-    ? await Promise.all([getEpisodePreview(current.id), fetchLegacyEpisodeMedia(current.href)])
-    : [null, { video: null, cover: "" }];
+    ? await Promise.all([getEpisodePreview(current.id), fetchLegacyEpisodeMedia(current.href, current.id)])
+    : [null, programPageHref ? await fetchLegacyEpisodeMedia(programPageHref) : { video: null, cover: "" }];
   const episode = preview
     ? { ...preview, video: preview.video ?? legacyMedia.video }
     : current && legacyMedia.video
@@ -111,6 +118,7 @@ export async function getProgramWatchData(
     episodes: rail.episodes,
     current,
     episode,
+    programVideo: current ? null : legacyMedia.video,
     videoCover: legacyMedia.cover || (current ? config?.verifiedVideoCovers?.[current.id] ?? "" : ""),
   };
 }

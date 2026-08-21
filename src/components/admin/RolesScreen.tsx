@@ -49,9 +49,11 @@ export default function RolesScreen() {
   const items = roles.data?.items ?? [];
 
   return (
-    <div className={css({ padding: "28px 32px 48px", maxWidth: "1100px" })}>
+    // Uncapped. The panels run the full width of the content column like every
+    // other screen — a 1100px ceiling left the header and the role rows
+    // stopping short of the edge with bare canvas beside them.
+    <div>
       <PageHeader
-        trail={[{ label: "Site" }, { label: "Roles" }]}
         title="Roles"
         sub={roles.isPending ? "Loading…" : `${items.length} roles — read-only, because a capability change is a WordPress-level operation.`}
         actions={<RefreshButton fetchedAt={roles.data?.fetchedAt} refreshing={refreshing} onRefresh={refresh} />}
@@ -59,13 +61,13 @@ export default function RolesScreen() {
 
       {/* The caveat is load-bearing, not decoration: a role's stored list is not
           the whole truth about what its holders can do. */}
-      <p className={css({ fontSize: "12.5px", marginTop: "12px", maxWidth: "640px", lineHeight: 1.7 })} style={{ color: ac.faint }}>
+      <p className={css({ fontSize: "12.5px", padding: "12px 22px", lineHeight: 1.7 })} style={{ color: ac.faint, background: ac.surface, borderBottom: `1px solid ${ac.border}` }}>
         Program capabilities (movies / TV shows / episodes) can also be granted at runtime by the AMS plugin, beyond
         what a role&rsquo;s stored list shows.
       </p>
 
       {roles.isPending ? (
-        <div className={css({ display: "flex", flexDirection: "column", gap: "12px", marginTop: "20px" })} aria-busy>
+        <div className={css({ display: "flex", flexDirection: "column", gap: "12px", padding: "16px 22px" })} aria-busy>
           {Array.from({ length: 5 }, (_, i) => (
             <Surface key={i} style={{ padding: "16px 20px" }}>
               <Bar w={i % 2 ? 180 : 140} h={16} />
@@ -77,11 +79,11 @@ export default function RolesScreen() {
           <SkeletonKeyframes />
         </div>
       ) : roles.isError ? (
-        <Surface style={{ marginTop: "20px" }}>
+        <Surface>
           <EmptyState icon="x" title="Couldn't load roles" body="Is plugin v1.7.5 deployed? Use Refresh to try again." />
         </Surface>
       ) : (
-        <div className={css({ display: "flex", flexDirection: "column", gap: "12px", marginTop: "20px" })}>
+        <div className={css({ display: "flex", flexDirection: "column", gap: "12px", padding: "16px 22px" })}>
           {items.map((role) => (
             <RoleCard key={role.slug} role={role} open={open === role.slug} onToggle={() => setOpen((s) => (s === role.slug ? null : role.slug))} />
           ))}

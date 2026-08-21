@@ -80,45 +80,106 @@ function useWidth<T extends HTMLElement>(ref: React.RefObject<T | null>, initial
 }
 
 /* -------------------------------------------------------------------------- *
- * The trend panel — two stacked plots, one x-axis, one crosshair.
+ * The trend panel — a smooth pageviews area over a publishing strip, one
+ * x-axis, one crosshair.
+ *
+ * WHY THESE ENCODINGS: both are contiguous, so they fit ANY panel width by
+ * construction. Daily bars could not — give them room and they gap into
+ * pickets, squeeze them at 90 days and they become slivers (that was v1 of
+ * this chart). The strip is one cell per day, cells butting edge-to-edge,
+ * intensity = stories published — a day with nothing published is a faint
+ * cell, never a hole.
  * -------------------------------------------------------------------------- */
 
 const PAD_L = 46;
 const PAD_R = 10;
-const H_VIEWS = 116;
-const H_POSTS = 58;
-const GAP = 26;
+// The default anatomy. A caller-supplied height scales the plot, the gap and
+// the strip PROPORTIONALLY (156:20:24 stays 156:20:24); the axis row is
+// fixed — its labels are type, not chart, and must not grow with the plots.
+const H_VIEWS = 156;
+const H_POSTS = 24; // the publishing strip
+const GAP = 20;
 const H_AXIS = 20;
 const TOTAL_H = H_VIEWS + GAP + H_POSTS + H_AXIS;
 
-export function TrendPanel({ series, hasViews }: { series: DashPoint[]; hasViews: boolean }) {
+/** Monotone cubic curve (Fritsch–Carlson, the d3 curveMonotoneX scheme)
+ *  through the points, as an SVG path. Monotone on purpose: it smooths the
+ *  RENDERING, never the data — a Catmull-Rom spline can overshoot and invent
+ *  peaks that never happened, which on an analytics chart is a lie. */
+function monotonePath(pts: { x: number; y: number }[]): string {
+  const n = pts.length;
+  if (n === 0) return "";
+  if (n === 1) return `M${pts[0].x},${pts[0].y}`;
+
+  const dx: number[] = [];
+  const slope: number[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    dx.push(pts[i + 1].x - pts[i].x);
+    slope.push((pts[i + 1].y - pts[i].y) / (dx[i] || 1));
+  }
+  // Tangent at each point: 0 across a local extremum, weighted harmonic mean
+  // of the neighbour slopes elsewhere — the guarantee against overshoot.
+  const tan: number[] = [slope[0]];
+  for (let i = 1; i < n - 1; i++) {
+    if (slope[i - 1] * slope[i] <= 0) {
+      tan.push(0);
+    } else {
+      const w1 = 2 * dx[i] + dx[i - 1];
+      const w2 = dx[i] + 2 * dx[i - 1];
+      tan.push((w1 + w2) / (w1 / slope[i - 1] + w2 / slope[i]));
+    }
+  }
+  tan.push(slope[n - 2]);
+
+  let d = `M${pts[0].x.toFixed(2)},${pts[0].y.toFixed(2)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const c1x = pts[i].x + dx[i] / 3;
+    const c1y = pts[i].y + (tan[i] * dx[i]) / 3;
+    const c2x = pts[i + 1].x - dx[i] / 3;
+    const c2y = pts[i + 1].y - (tan[i + 1] * dx[i]) / 3;
+    d += ` C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${pts[i + 1].x.toFixed(2)},${pts[i + 1].y.toFixed(2)}`;
+  }
+  return d;
+}
+
+export function TrendPanel({
+  series,
+  hasViews,
+  height = TOTAL_H,
+}: {
+  series: DashPoint[];
+  hasViews: boolean;
+  /** Overall SVG height, default 220. Floored at 120 — below that the strip
+   *  collapses into the axis labels. */
+  height?: number;
+}) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const width = useWidth(wrapRef);
   const [hover, setHover] = useState<number | null>(null);
   const clipId = useId();
+  const gradId = `${clipId}-grad`;
 
   const n = series.length;
   const plotW = Math.max(80, width - PAD_L - PAD_R);
   const band = n > 0 ? plotW / n : 0;
 
-  const maxViews = niceMax(Math.max(...series.map((p) => p.views), 0));
-  const maxPosts = niceMax(Math.max(...series.map((p) => p.posts), 0));
+  const totalH = Math.max(120, height);
+  const scale = (totalH - H_AXIS) / (H_VIEWS + GAP + H_POSTS);
+  const hViews = H_VIEWS * scale;
+  const hPosts = H_POSTS * scale;
 
-  // Band centre — the line's x, and the bar's centre.
+  const maxViews = niceMax(Math.max(...series.map(p => p.views), 0));
+  // RAW max, not niceMax: this is the intensity ceiling of the strip, so the
+  // busiest real day should hit full strength rather than a rounded-up 10.
+  const maxPosts = Math.max(...series.map(p => p.posts), 1);
+
+  // Band centre — the curve's x, and the cell's centre.
   const cx = (i: number) => PAD_L + band * (i + 0.5);
-  const yViews = (v: number) => H_VIEWS - (v / maxViews) * (H_VIEWS - 8);
-  const postsTop = H_VIEWS + GAP;
-  const yPosts = (v: number) => postsTop + H_POSTS - (v / maxPosts) * H_POSTS;
+  const yViews = (v: number) => hViews - (v / maxViews) * (hViews - 8);
+  const postsTop = hViews + GAP * scale;
 
-  const linePts = series.map((p, i) => `${cx(i)},${yViews(p.views)}`).join(" ");
-  const areaPath =
-    n > 0
-      ? `M${cx(0)},${H_VIEWS} L${series.map((p, i) => `${cx(i)},${yViews(p.views)}`).join(" L")} L${cx(n - 1)},${H_VIEWS} Z`
-      : "";
-
-  // Bars: capped at 24px, and the 2px surface gap is taken out of the band so
-  // neighbours read as separate without a stroke around them.
-  const barW = Math.max(1, Math.min(24, band - 2));
+  const linePath = monotonePath(series.map((p, i) => ({ x: cx(i), y: yViews(p.views) })));
+  const areaPath = n > 0 ? `${linePath} L${cx(n - 1).toFixed(2)},${hViews} L${cx(0).toFixed(2)},${hViews} Z` : "";
 
   const onMove = (e: React.PointerEvent<SVGSVGElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -140,59 +201,97 @@ export function TrendPanel({ series, hasViews }: { series: DashPoint[]; hasViews
   return (
     <div ref={wrapRef} className={css({ position: "relative", width: "100%" })}>
       <svg
-        width="100%"
-        height={TOTAL_H}
-        viewBox={`0 0 ${Math.max(width, 1)} ${TOTAL_H}`}
-        role="img"
+        width='100%'
+        height={totalH}
+        viewBox={`0 0 ${Math.max(width, 1)} ${totalH}`}
+        role='img'
         tabIndex={0}
         aria-label={`Daily pageviews and stories published over the last ${n} days`}
         onPointerMove={onMove}
         onPointerLeave={() => setHover(null)}
         onBlur={() => setHover(null)}
         onKeyDown={onKey}
-        className={css({ display: "block", outline: "none", _focusVisible: { outline: `2px solid ${ac.data}`, outlineOffset: "2px", borderRadius: "6px" } })}
-      >
+        className={css({
+          display: "block",
+          outline: "none",
+          _focusVisible: { outline: `2px solid ${ac.data}`, outlineOffset: "2px", borderRadius: "6px" },
+        })}>
         <defs>
           <clipPath id={clipId}>
-            <rect x={PAD_L} y={0} width={plotW} height={TOTAL_H} />
+            <rect x={PAD_L} y={0} width={plotW} height={totalH} />
           </clipPath>
+          {/* Strong at the curve, gone at the baseline — the fade is what lets
+              the fill take the whole plot without weighing it down.
+              Lighter than it was (0.26): `data` is now a deeper, less green teal,
+              and at the old opacity the wash gained weight the line should be
+              carrying. The point of the fill is to say "area under this curve",
+              not to be the loudest thing on the panel. */}
+          <linearGradient id={gradId} x1='0' y1='0' x2='0' y2='1'>
+            <stop offset='0' stopColor={ac.data} stopOpacity={0.18} />
+            <stop offset='1' stopColor={ac.data} stopOpacity={0.015} />
+          </linearGradient>
         </defs>
 
         {/* --- views plot: gridlines, then the wash, then the line --- */}
-        {[0, 0.5, 1].map((f) => (
-          <line key={f} x1={PAD_L} x2={PAD_L + plotW} y1={yViews(maxViews * f)} y2={yViews(maxViews * f)} stroke={f === 0 ? AXIS : GRID} strokeWidth={1} />
+        {[0, 0.5, 1].map(f => (
+          <line
+            key={f}
+            x1={PAD_L}
+            x2={PAD_L + plotW}
+            y1={yViews(maxViews * f)}
+            y2={yViews(maxViews * f)}
+            stroke={f === 0 ? AXIS : GRID}
+            strokeWidth={1}
+          />
         ))}
-        {[maxViews, maxViews / 2].map((v) => (
-          <text key={v} x={PAD_L - 8} y={yViews(v) + 3.5} textAnchor="end" fontSize={10.5} fill={ac.muted} className={css({ fontVariantNumeric: "tabular-nums" })}>
+        {[maxViews, maxViews / 2].map(v => (
+          <text
+            key={v}
+            x={PAD_L - 8}
+            y={yViews(v) + 3.5}
+            textAnchor='end'
+            fontSize={10.5}
+            fill={ac.muted}
+            className={css({ fontVariantNumeric: "tabular-nums" })}>
             {fmt(Math.round(v))}
           </text>
         ))}
 
         {hasViews && n > 0 ? (
           <g clipPath={`url(#${clipId})`}>
-            <path d={areaPath} fill={ac.data} fillOpacity={0.1} />
-            <polyline points={linePts} fill="none" stroke={ac.data} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+            <path d={areaPath} fill={`url(#${gradId})`} />
+            <path d={linePath} fill='none' stroke={ac.data} strokeWidth={2} strokeLinejoin='round' strokeLinecap='round' />
             {/* The endpoint is the one direct label — a value on every day would
                 go unread. 2px surface ring keeps the dot legible on the line. */}
             <circle cx={cx(last)} cy={yViews(series[last].views)} r={4} fill={ac.data} stroke={ac.surface} strokeWidth={2} />
           </g>
         ) : null}
 
-        {/* --- posts plot --- */}
-        <line x1={PAD_L} x2={PAD_L + plotW} y1={postsTop + H_POSTS} y2={postsTop + H_POSTS} stroke={AXIS} strokeWidth={1} />
-        <text x={PAD_L - 8} y={postsTop + 10} textAnchor="end" fontSize={10.5} fill={ac.muted} className={css({ fontVariantNumeric: "tabular-nums" })}>
+        {/* --- the publishing strip: one cell per day, intensity = count --- */}
+        <text x={PAD_L - 8} y={postsTop + hPosts / 2 + 3.5} textAnchor='end' fontSize={10.5} fill={ac.muted}>
           {fmt(maxPosts)}
         </text>
-        {series.map((p, i) =>
-          p.posts > 0 ? (
-            <path key={p.d} d={barPath(cx(i) - barW / 2, yPosts(p.posts), barW, postsTop + H_POSTS - yPosts(p.posts))} fill={ac.data} fillOpacity={hover === null || hover === i ? 0.85 : 0.45} />
-          ) : null,
-        )}
+        <g clipPath={`url(#${clipId})`}>
+          {series.map((p, i) => (
+            <rect
+              key={p.d}
+              x={PAD_L + band * i + 0.5}
+              y={postsTop}
+              width={Math.max(0.5, band - 1)}
+              height={hPosts}
+              rx={2}
+              fill={p.posts > 0 ? ac.data : GRID}
+              fillOpacity={p.posts > 0 ? 0.25 + 0.65 * (p.posts / maxPosts) : 1}
+              stroke={hover === i ? ac.data : "none"}
+              strokeWidth={hover === i ? 1.5 : 0}
+            />
+          ))}
+        </g>
 
         {/* --- shared x labels --- */}
         {series.map((p, i) =>
           i % tickEvery === 0 || i === last ? (
-            <text key={p.d} x={cx(i)} y={TOTAL_H - 4} textAnchor="middle" fontSize={10.5} fill={ac.muted}>
+            <text key={p.d} x={cx(i)} y={totalH - 4} textAnchor='middle' fontSize={10.5} fill={ac.muted}>
               {dayLabel(p.d)}
             </text>
           ) : null,
@@ -200,13 +299,11 @@ export function TrendPanel({ series, hasViews }: { series: DashPoint[]; hasViews
 
         {/* --- the crosshair spans BOTH plots: one pointer, one day --- */}
         {hover !== null && series[hover] ? (
-          <line x1={cx(hover)} x2={cx(hover)} y1={0} y2={postsTop + H_POSTS} stroke={ac.borderStrong} strokeWidth={1} />
+          <line x1={cx(hover)} x2={cx(hover)} y1={0} y2={postsTop + hPosts} stroke={ac.borderStrong} strokeWidth={1} />
         ) : null}
       </svg>
 
-      {hover !== null && series[hover] ? (
-        <Tooltip x={cx(hover)} width={width} point={series[hover]} hasViews={hasViews} />
-      ) : null}
+      {hover !== null && series[hover] ? <Tooltip x={cx(hover)} width={width} point={series[hover]} hasViews={hasViews} /> : null}
     </div>
   );
 }
@@ -217,19 +314,27 @@ function Tooltip({ x, width, point, hasViews }: { x: number; width: number; poin
   const flip = x > width - 140;
   return (
     <div
-      className={css({ position: "absolute", top: "4px", pointerEvents: "none", borderRadius: "8px", padding: "8px 10px", fontSize: "12px", minWidth: "128px", zIndex: 2 })}
+      className={css({
+        position: "absolute",
+        top: "4px",
+        pointerEvents: "none",
+        borderRadius: "8px",
+        padding: "8px 10px",
+        fontSize: "12px",
+        minWidth: "128px",
+        zIndex: 2,
+      })}
       style={{
         left: flip ? undefined : `${x + 10}px`,
         right: flip ? `${width - x + 10}px` : undefined,
         background: ac.surface,
         border: `1px solid ${ac.border}`,
         boxShadow: ac.shadowMd,
-      }}
-    >
+      }}>
       <div className={css({ fontSize: "11.5px", marginBottom: "5px" })} style={{ color: ac.muted }}>
         {dayLabel(point.d)}
       </div>
-      {hasViews ? <TooltipRow value={point.views} label="pageviews" /> : null}
+      {hasViews ? <TooltipRow value={point.views} label='pageviews' /> : null}
       <TooltipRow value={point.posts} label={point.posts === 1 ? "story" : "stories"} />
     </div>
   );
@@ -238,7 +343,10 @@ function Tooltip({ x, width, point, hasViews }: { x: number; width: number; poin
 function TooltipRow({ value, label }: { value: number; label: string }) {
   return (
     <div className={css({ display: "flex", alignItems: "center", gap: "6px", lineHeight: 1.7 })}>
-      <span className={css({ width: "10px", height: "2px", borderRadius: "1px", flex: "none" })} style={{ background: ac.data }} />
+      <span
+        className={css({ width: "10px", height: "2px", borderRadius: "1px", flex: "none" })}
+        style={{ background: ac.data }}
+      />
       <span className={css({ fontWeight: 600, fontVariantNumeric: "tabular-nums" })}>{fmt(value)}</span>
       <span style={{ color: ac.muted }}>{label}</span>
     </div>
@@ -292,7 +400,7 @@ export function Sparkline({
   return (
     <svg width={width} height={height} aria-hidden className={css({ display: "block", overflow: "visible" })}>
       <path d={`M${x(0)},${height} L${pts.split(" ").join(" L")} L${x(n - 1)},${height} Z`} fill={ac.data} fillOpacity={0.1} />
-      <polyline points={pts} fill="none" stroke={ac.data} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+      <polyline points={pts} fill='none' stroke={ac.data} strokeWidth={2} strokeLinejoin='round' strokeLinecap='round' />
       <circle cx={x(n - 1)} cy={y(values[n - 1])} r={3} fill={ac.data} stroke={ac.surface} strokeWidth={2} />
     </svg>
   );
@@ -305,7 +413,7 @@ export function Sparkline({
 export function RankBars({ rows }: { rows: { id: number; name: string; count: number }[] }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const width = useWidth(wrapRef, 300);
-  const max = Math.max(...rows.map((r) => r.count), 1);
+  const max = Math.max(...rows.map(r => r.count), 1);
   // Name column, then the track, then room for the value at the tip.
   const nameW = Math.min(132, Math.max(88, width * 0.42));
   const valueW = 30;
@@ -313,15 +421,20 @@ export function RankBars({ rows }: { rows: { id: number; name: string; count: nu
 
   return (
     <div ref={wrapRef} className={css({ display: "flex", flexDirection: "column", gap: "10px" })}>
-      {rows.map((r) => (
+      {rows.map(r => (
         <div key={r.id} className={css({ display: "flex", alignItems: "center", gap: "10px" })}>
-          <div className={css({ fontSize: "13px", lineClamp: 1, wordBreak: "break-all", flex: "none" })} style={{ width: `${nameW}px` }} title={r.name}>
+          <div
+            className={css({ fontSize: "14px", lineClamp: 1, wordBreak: "break-all", flex: "none" })}
+            style={{ width: `${nameW}px` }}
+            title={r.name}>
             {r.name || "—"}
           </div>
           <svg width={trackW} height={10} className={css({ flex: "none", display: "block" })} aria-hidden>
             <path d={barPath(0, 1, (r.count / max) * trackW, 8, false)} fill={ac.data} fillOpacity={0.85} />
           </svg>
-          <div className={css({ fontSize: "12.5px", fontVariantNumeric: "tabular-nums", flex: "none", textAlign: "right" })} style={{ width: `${valueW}px`, color: ac.sub }}>
+          <div
+            className={css({ fontSize: "12.5px", fontVariantNumeric: "tabular-nums", flex: "none", textAlign: "right" })}
+            style={{ width: `${valueW}px`, color: ac.sub }}>
             {r.count}
           </div>
         </div>
@@ -335,8 +448,14 @@ export function RankBars({ rows }: { rows: { id: number; name: string; count: nu
 export function ShareRule({ value, max }: { value: number; max: number }) {
   const pct = max > 0 ? Math.max(2, (value / max) * 100) : 0;
   return (
-    <div className={css({ height: "3px", borderRadius: "2px", marginTop: "7px", overflow: "hidden" })} style={{ background: ac.rowLine }} aria-hidden>
-      <div className={css({ height: "100%", borderRadius: "2px" })} style={{ width: `${pct}%`, background: ac.data, opacity: 0.75 }} />
+    <div
+      className={css({ height: "3px", borderRadius: "2px", marginTop: "7px", overflow: "hidden" })}
+      style={{ background: ac.rowLine }}
+      aria-hidden>
+      <div
+        className={css({ height: "100%", borderRadius: "2px" })}
+        style={{ width: `${pct}%`, background: ac.data, opacity: 0.75 }}
+      />
     </div>
   );
 }
@@ -348,14 +467,14 @@ export function ShareRule({ value, max }: { value: number; max: number }) {
 export function Delta({ current, previous, label }: { current: number | null; previous: number | null; label: string }) {
   if (current === null || previous === null) {
     return (
-      <span className={css({ fontSize: "12px" })} style={{ color: ac.faint }}>
+      <span className={css({ fontSize: "14px" })} style={{ color: ac.faint }}>
         no comparison yet
       </span>
     );
   }
   if (previous === 0) {
     return (
-      <span className={css({ fontSize: "12px" })} style={{ color: ac.muted }}>
+      <span className={css({ fontSize: "14px" })} style={{ color: ac.muted }}>
         {current === 0 ? `nothing ${label}` : `up from none ${label}`}
       </span>
     );
@@ -366,7 +485,7 @@ export function Delta({ current, previous, label }: { current: number | null; pr
   // never the only channel — the arrow and the sign carry it too.
   const colour = flat ? ac.muted : pct > 0 ? ac.good : ac.warn;
   return (
-    <span className={css({ fontSize: "12px", display: "inline-flex", alignItems: "center", gap: "4px" })}>
+    <span className={css({ fontSize: "14px", display: "inline-flex", alignItems: "center", gap: "4px" })}>
       <span style={{ color: colour, fontWeight: 600 }}>
         {flat ? "±" : pct > 0 ? "▲" : "▼"} {Math.abs(pct)}%
       </span>

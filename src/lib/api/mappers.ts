@@ -178,10 +178,10 @@ export function mapArticle(
     // its keys are id/title/thumbnail/categories/dates/description/
     // post_content/author/seo). The real number comes from getCommentCount().
     commentCount: 0,
-    featured: { src: d.thumbnail, badge: "AMS Infotainment" },
+    featured: { src: d.thumbnail, badge: "AMS Economy" },
     bodyHtml: d.post_content ?? "",
     author: {
-      name: d.author?.author_name ?? "AMS Infotainment",
+      name: d.author?.author_name ?? "AMS Economy",
       avatar: d.author?.profile ?? "",
       bio: d.author?.description ?? "",
     },

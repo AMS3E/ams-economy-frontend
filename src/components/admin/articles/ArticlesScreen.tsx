@@ -22,7 +22,7 @@ import {
 } from "@/lib/admin/queries";
 import { DEFAULT_STATUSES } from "@/lib/admin/constants";
 
-const PER_PAGE = 10; // mirrors the BFF's fixed page size
+const PER_PAGE = 20; // mirrors the BFF's fixed page size — keep the two in step
 
 export default function ArticlesScreen() {
   const sp = useSearchParams();

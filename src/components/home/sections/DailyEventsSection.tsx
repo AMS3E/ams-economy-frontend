@@ -60,14 +60,29 @@ export default function DailyEventsSection({
         <div
           className={css({
             display: "flex",
+            flexWrap: "wrap",
             alignItems: "center",
             justifyContent: "space-between",
+            rowGap: "10px",
             marginTop: "18px",
             marginBottom: "18px",
           })}
         >
           <h2 className={css({ fontSize: "24px" })}>ព្រឹត្តិការណ៍ប្រចាំថ្ងៃ</h2>
-          <div className={css({ flex: "auto", padding: "0.5px", margin: "0px 16px", background: "#e8e8e8" })}></div>
+          {/* Purely decorative — dropped below `sm` rather than left to collapse
+              into its own wrapped row once the title + Pager no longer fit one
+              line (Pager alone can run 7 cells wide, which overflows a phone's
+              content width; body clips overflow-x, so an unwrapped row silently
+              cut the tail of the pager off-screen instead of scrolling to it). */}
+          <div
+            className={css({
+              display: { base: "none", sm: "block" },
+              flex: "auto",
+              padding: "0.5px",
+              margin: "0px 16px",
+              background: "#e8e8e8",
+            })}
+          ></div>
           {page !== undefined && totalPages !== undefined && (
             <Pager page={page} totalPages={totalPages} basePath={basePath} pageStyle={pageStyle} />
           )}

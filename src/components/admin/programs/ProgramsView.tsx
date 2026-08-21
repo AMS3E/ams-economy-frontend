@@ -73,8 +73,9 @@ export default function ProgramsView({
     view === "grid" ? (
       <div className={gridClass} aria-busy>
         {Array.from({ length: 8 }, (_, i) => (
-          <Surface key={i} style={{ overflow: "hidden" }}>
-            <div className={css({ aspectRatio: "16/9" })} style={{ background: ac.skeleton, borderBottom: `1px solid ${ac.border}` }} />
+          // Square like the real cards, or the corners round off mid-load.
+          <Surface key={i} style={{ overflow: "hidden", borderRadius: 0 }}>
+            <div className={css({ aspectRatio: "1/1" })} style={{ background: ac.skeleton, borderBottom: `1px solid ${ac.border}` }} />
             <div className={css({ padding: "12px 14px 14px" })}>
               <Bar w={i % 2 ? "80%" : "60%"} h={14} />
               <div style={{ marginTop: 10 }}>
@@ -86,11 +87,11 @@ export default function ProgramsView({
         <SkeletonKeyframes />
       </div>
     ) : (
-      <Surface style={{ marginTop: "16px", overflow: "hidden" }}>
+      <Surface style={{ overflow: "hidden" }}>
         <Table>
           <thead>
             <tr>
-              <Th width="66px" />
+              <Th width="140px" />
               <Th>Title</Th>
               <Th width="120px">Status</Th>
             </tr>
@@ -98,7 +99,7 @@ export default function ProgramsView({
           <tbody>
             {Array.from({ length: 8 }, (_, i) => (
               <tr key={i} aria-busy>
-                <Td><Bar w={38} h={56} r={6} /></Td>
+                <Td><Bar w={96} h={54} r={8} /></Td>
                 <Td><Bar w={i % 2 ? "62%" : "44%"} h={15} /></Td>
                 <Td><Bar w={78} h={20} r={99} /></Td>
               </tr>
@@ -109,11 +110,11 @@ export default function ProgramsView({
       </Surface>
     )
   ) : error ? (
-    <Surface style={{ marginTop: "16px" }}>
+    <Surface>
       <EmptyState icon="x" title="Couldn't load programs" body="WordPress didn't answer. Use Refresh to try again." />
     </Surface>
   ) : list.length === 0 ? (
-    <Surface style={{ marginTop: "16px" }}>
+    <Surface>
       <EmptyState
         icon="programs"
         title="No programs match"
@@ -133,21 +134,28 @@ export default function ProgramsView({
   ) : view === "grid" ? (
     <div className={gridClass}>
       {list.map((p) => (
-        <Surface key={p.id} hover style={{ overflow: "hidden" }}>
+        // SQUARE, unlike every other Surface (owner's call for this grid):
+        // poster art reads as media, not as a control, and the radius was
+        // shaving the artwork's corners. The inline 0 beats surfaceBase's 14px.
+        <Surface key={p.id} hover style={{ overflow: "hidden", borderRadius: 0 }}>
           {/* The card IS the link, so the whole tile is one keyboard stop and
               one hit target — the grid's rows have no other action. */}
           <Link href={`/admin/programs/${p.id}`} className={cardLinkClass}>
             {p.poster ? (
               // eslint-disable-next-line @next/next/no-img-element -- admin thumbnail; next/image needs remotePatterns for the S3 host
-              <img src={p.poster} alt="" className={css({ width: "100%", display: "block" })} style={{ aspectRatio: "16/9", objectFit: "cover", borderBottom: `1px solid ${ac.border}` }} />
+              <img src={p.poster} alt="" className={css({ width: "100%", display: "block" })} style={{ aspectRatio: "1/1", objectFit: "cover", borderBottom: `1px solid ${ac.border}` }} />
             ) : (
-              <div className={css({ aspectRatio: "16/9" })} style={{ background: ac.skeleton, borderBottom: `1px solid ${ac.border}` }} />
+              <div className={css({ aspectRatio: "1/1" })} style={{ background: ac.skeleton, borderBottom: `1px solid ${ac.border}` }} />
             )}
             <div className={css({ padding: "12px 14px 14px" })}>
-              <div className={css({ lineHeight: 1.5, fontWeight: 500, lineClamp: 2, minHeight: "42px" })} style={{ fontSize: isKhmer(p.title) ? "15px" : "14px" }}>
+              {/* No reserved two-line minHeight: most titles are one line, and
+                  the empty second line read as a gulf between title and pill.
+                  The pill follows the title; row heights still equalise via
+                  the grid's stretch. */}
+              <div className={css({ lineHeight: 1.5, fontWeight: 500, lineClamp: 2 })} style={{ fontSize: isKhmer(p.title) ? "15px" : "14px" }}>
                 {p.title}
               </div>
-              <div className={css({ display: "flex", alignItems: "center", gap: "6px", marginTop: "8px", flexWrap: "wrap" })}>
+              <div className={css({ display: "flex", alignItems: "center", gap: "6px", marginTop: "4px", flexWrap: "wrap" })}>
                 <StatusPill status={statusDisplay(p.status)} />
                 {mixedTypes ? <Badge>{p.type}</Badge> : null}
               </div>
@@ -157,11 +165,15 @@ export default function ProgramsView({
       ))}
     </div>
   ) : (
-    <Surface style={{ marginTop: "16px", overflow: "hidden" }}>
+    <Surface style={{ overflow: "hidden" }}>
       <Table>
         <thead>
           <tr>
-            <Th width="66px" />
+            {/* 96px art + the Td's 22px-a-side padding. At the old 66px the
+                cell left ~22px of content room, and the global img max-width
+                reset squeezed every poster into a portrait sliver no matter
+                what size the <img> itself asked for. */}
+            <Th width="140px" />
             <Th>Title</Th>
             {mixedTypes ? <Th width="120px">Type</Th> : null}
             <Th width="120px">Status</Th>
@@ -171,18 +183,21 @@ export default function ProgramsView({
           {list.map((p) => (
             <Tr key={p.id} className={css({ "&:hover [data-thumb]": { borderColor: "var(--colors-admin-border-strong)" } })}>
               <Td>
+                {/* Same 16:9 window the grid card uses — the posters are wide
+                    logo art, and the old 38×56 portrait crop reduced them to
+                    unrecognizable slivers. */}
                 {p.poster ? (
                   // eslint-disable-next-line @next/next/no-img-element -- admin thumbnail; next/image needs remotePatterns for the S3 host
-                  <img data-thumb src={p.poster} alt="" style={{ width: 38, height: 56, objectFit: "cover", borderRadius: 6, border: `1px solid ${ac.border}`, transition: "border-color .12s", display: "block" }} />
+                  <img data-thumb src={p.poster} alt="" style={{ width: 96, height: 54, objectFit: "cover", borderRadius: 8, border: `1px solid ${ac.border}`, transition: "border-color .12s", display: "block" }} />
                 ) : (
-                  <div data-thumb style={{ width: 38, height: 56, borderRadius: 6, background: ac.skeleton, border: `1px solid ${ac.border}`, transition: "border-color .12s" }} />
+                  <div data-thumb style={{ width: 96, height: 54, borderRadius: 8, background: ac.skeleton, border: `1px solid ${ac.border}`, transition: "border-color .12s" }} />
                 )}
               </Td>
               <Td>
                 {/* The ROW is not the link — a <tr> cannot be an anchor. The
                     title carries it, as on Articles, which also gives keyboard
                     users one stop per row instead of one per cell. */}
-                <Link href={`/admin/programs/${p.id}`} className={css({ fontSize: "14px", lineHeight: 1.5, lineClamp: 2, display: "block", _hover: { textDecoration: "underline" } })}>
+                <Link href={`/admin/programs/${p.id}`} className={css({ fontSize: "15.5px", lineHeight: 1.5, lineClamp: 2, display: "block", _hover: { textDecoration: "underline" } })}>
                   {p.title}
                 </Link>
               </Td>
@@ -207,9 +222,8 @@ export default function ProgramsView({
   );
 
   return (
-    <div className={css({ padding: "28px 32px 48px", maxWidth: "1440px" })}>
+    <div>
       <PageHeader
-        trail={[{ label: "Content" }, { label: "Programs" }]}
         title="Programs"
         sub={sub}
         actions={
@@ -223,7 +237,7 @@ export default function ProgramsView({
         }
       />
 
-      <div className={css({ display: "flex", alignItems: "center", gap: "10px", marginTop: "20px", flexWrap: "wrap" })}>
+      <Surface className={css({ display: "flex", alignItems: "center", gap: "10px", padding: "12px 22px", flexWrap: "wrap" })} style={{ borderBottom: `1px solid ${ac.border}` }}>
         <form onSubmit={(e) => e.preventDefault()} className={css({ display: "flex" })}>
           <SearchInput placeholder="Search programs…" value={search} onValueChange={setSearch} width="300px" />
         </form>
@@ -237,7 +251,7 @@ export default function ProgramsView({
             { value: "list", label: "List" },
           ]}
         />
-      </div>
+      </Surface>
 
       {body}
     </div>
@@ -248,7 +262,7 @@ const gridClass = css({
   display: "grid",
   gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))",
   gap: "16px",
-  marginTop: "16px",
+  padding: "16px 22px",
 });
 
 /** The anchor fills the card so the hover lift and the hit target are the same
@@ -256,7 +270,9 @@ const gridClass = css({
  *  the anchor is what actually takes focus. */
 const cardLinkClass = css({
   display: "block",
-  borderRadius: "14px",
+  // Square to match the card (see the grid's Surface note) — a rounded focus
+  // ring on a square tile would trace a shape that isn't there.
+  borderRadius: 0,
   overflow: "hidden",
   _focusVisible: { outline: "2px solid var(--colors-admin-focus)", outlineOffset: "2px" },
 });

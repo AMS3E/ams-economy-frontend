@@ -27,11 +27,13 @@ type Props = { menu: NavSection[]; pills: NavPill[]; progIcons: ProgramIcon[] };
 // white on a black bar half the time.
 const HAIRLINE = "rgba(255,255,255,.08)";
 
-// Shown only below `lg`; on desktop the hover nav in SiteHeader takes over.
+// Shown only below `xl`; on desktop the hover nav in SiteHeader takes over.
 // Sits directly on the top bar's now-white background (see SiteHeader), unlike
 // the drawer PANEL below, which stays its own dark surface independent of that.
+// Matches SiteHeader's navRoot/pills switch exactly — the two are mutually
+// exclusive at every width, never both hidden and never both shown.
 const hamburger = css({
-  display: { base: "inline-flex", lg: "none" },
+  display: { base: "inline-flex", xl: "none" },
   alignItems: "center",
   justifyContent: "center",
   flex: "0 0 auto",
@@ -46,7 +48,7 @@ const hamburger = css({
 // by data-open (an attribute selector, not a second `transform`/`opacity` class —
 // two competing atomic classes would resolve by stylesheet order, not intent).
 const overlay = css({
-  display: { base: "block", lg: "none" },
+  display: { base: "block", xl: "none" },
   position: "fixed",
   inset: 0,
   zIndex: 100,
@@ -269,7 +271,7 @@ export default function MobileNav({ menu, pills, progIcons }: Props) {
           <div className={drawerHead}>
             {/* Same brand mark as the desktop bar. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="https://s3.ams.com.kh/infotainment/2022/09/AMS-COLOUR-FULL-H28.svg" width={79} height={28} alt="AMS Infotainment" />
+            <img src="https://s3.ams.com.kh/economy/2022/09/AMS-COLOUR-FULL-H28.svg" width={79} height={28} alt="AMS Economy" />
             <button ref={closeRef} type="button" aria-label="បិទម៉ឺនុយ" onClick={closeDrawer} className={closeBtn}>
               <CloseIcon size={24} />
             </button>

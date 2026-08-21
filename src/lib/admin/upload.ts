@@ -34,17 +34,29 @@ function asciiFilename(name: string): string {
   return `upload-${Date.now()}.${ext}`;
 }
 
+/** Per-type ceilings. OUR caps, not the host's: the WP server's own PHP
+ *  `upload_max_filesize` is invisible from here and wins regardless — a file
+ *  over that limit comes back as "WordPress rejected the upload (413)", and
+ *  raising it is an aaPanel setting, not code. */
+const MAX_BYTES: Record<string, number> = {
+  image: 10 * 1024 * 1024,
+  audio: 50 * 1024 * 1024,
+  video: 300 * 1024 * 1024,
+};
+
 /**
- * Upload one image to the WordPress media library as the logged-in user
- * (raw-body POST wp/v2/media — the standard core contract).
+ * Upload one media file (image / video / audio) to the WordPress library as
+ * the logged-in user (raw-body POST wp/v2/media — the standard core contract).
  *
  * ⚠ s3.ams.com.kh offload plugin behavior over REST is still being verified —
  * first live test tells us whether the offload layer honors this contract.
  */
 export async function uploadImage(file: unknown): Promise<UploadResult> {
   if (!(file instanceof File) || file.size === 0) return { ok: false, error: "Pick a file first." };
-  if (!file.type.startsWith("image/")) return { ok: false, error: "Only images for now." };
-  if (file.size > 10 * 1024 * 1024) return { ok: false, error: "Keep uploads under 10 MB." };
+  const root = file.type.split("/")[0];
+  const cap = MAX_BYTES[root];
+  if (!cap) return { ok: false, error: "Only images, video and audio can be uploaded." };
+  if (file.size > cap) return { ok: false, error: `Keep ${root} uploads under ${Math.round(cap / (1024 * 1024))} MB.` };
 
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return { ok: false, authExpired: true, error: "Session expired — log in again." };
@@ -59,7 +71,9 @@ export async function uploadImage(file: unknown): Promise<UploadResult> {
     },
     body: Buffer.from(await file.arrayBuffer()),
     cache: "no-store",
-    signal: AbortSignal.timeout(120_000), // uploads are big; still bounded
+    // Bounded, but sized to the payload: a 300MB video on this slow host is
+    // minutes, not the 2 minutes an image gets.
+    signal: AbortSignal.timeout(root === "image" ? 120_000 : 600_000),
   }).catch(() => null);
 
   if (!res) return { ok: false, error: "Couldn't reach WordPress." };

@@ -6,7 +6,7 @@ import { css } from "@/styled-system/css";
 import { ac } from "../tokens";
 import { Icon } from "../icons";
 import { Dropdown, SearchInput, type Option } from "../Dropdown";
-import { Surface, PageHeader, Button, IconButton, Checkbox, Badge, Table, Th, Td, Tr, TableFooter, EmptyState } from "../ui";
+import { Surface, PageHeader, Button, IconButton, Badge, Table, Th, Td, Tr, TableFooter, EmptyState } from "../ui";
 import { Bar, SkeletonKeyframes } from "../Skeleton";
 import RefreshButton from "../RefreshButton";
 import type { UserListResult } from "@/lib/admin/users";
@@ -67,7 +67,6 @@ export default function UsersView({
   // Row selection is Phoenix's table move. It is local and page-scoped on
   // purpose: nothing here acts on a selection yet, so persisting it across
   // pages would promise a bulk action that does not exist.
-  const [selected, setSelected] = useState<Set<number>>(new Set());
   // Sorting is PAGE-LOCAL and says so, because neither read path takes an
   // order parameter: the fast users resource and the REST fallback both pin
   // `orderby=name&order=asc`. Sorting the whole 84-row set would mean a
@@ -120,15 +119,12 @@ export default function UsersView({
     URL.revokeObjectURL(url);
   };
 
-  const allOnPageSelected = items.length > 0 && items.every((u) => selected.has(u.id));
-  const someSelected = selected.size > 0;
 
   return (
-    <div className={css({ padding: "28px 32px 48px", maxWidth: "1440px" })}>
+    <div>
       {/* Header rhythm (trail → title → actions) now lives in PageHeader, so
           every screen inherits it rather than re-deriving the spacing. */}
       <PageHeader
-        trail={[{ label: "Site" }, { label: "Users" }]}
         title="Users"
         sub={loading ? "Loading…" : `${total.toLocaleString("en-US")} people can sign in to this dashboard`}
         actions={
@@ -153,8 +149,9 @@ export default function UsersView({
         }
       />
 
-      {/* Filters: one row, above the content they scope. */}
-      <div className={css({ display: "flex", alignItems: "center", gap: "10px", marginTop: "20px", flexWrap: "wrap" })}>
+      <Surface>
+      {/* Filters: the panel's first cell, above the content they scope. */}
+      <div className={css({ display: "flex", alignItems: "center", gap: "10px", padding: "12px 22px", flexWrap: "wrap" })} style={{ borderBottom: `1px solid ${ac.border}` }}>
         <form onSubmit={onSearch} className={css({ display: "flex" })}>
           <SearchInput placeholder="Search users…" name="q" defaultValue={query.search} width="300px" />
         </form>
@@ -168,11 +165,6 @@ export default function UsersView({
           selected={query.role}
           onSelect={(v) => go({ role: v })}
         />
-        {someSelected ? (
-          <span className={css({ fontSize: "12.5px", marginLeft: "2px" })} style={{ color: ac.muted }}>
-            {selected.size} selected
-          </span>
-        ) : null}
       </div>
 
       {creating ? (
@@ -192,8 +184,8 @@ export default function UsersView({
       {createdName ? (
         <div
           role="status"
-          className={css({ display: "flex", alignItems: "center", gap: "9px", marginTop: "16px", padding: "10px 14px", borderRadius: "10px", fontSize: "13px" })}
-          style={{ background: ac.dataSoft, border: `1px solid ${ac.data}`, color: ac.data }}
+          className={css({ display: "flex", alignItems: "center", gap: "9px", padding: "10px 22px", fontSize: "13px" })}
+          style={{ background: ac.dataSoft, borderBottom: `1px solid ${ac.data}`, color: ac.data }}
         >
           <Icon name="check" size={14} strokeWidth={2.2} />
           <span>
@@ -212,19 +204,10 @@ export default function UsersView({
         </div>
       ) : null}
 
-      <Surface style={{ marginTop: "16px", overflow: "hidden" }}>
         <div style={{ opacity: fetching && !loading ? 0.55 : 1, transition: "opacity .15s" }}>
           <Table>
             <thead>
               <tr>
-                <Th width="44px">
-                  <Checkbox
-                    label={allOnPageSelected ? "Deselect all users on this page" : "Select all users on this page"}
-                    checked={allOnPageSelected}
-                    indeterminate={someSelected && !allOnPageSelected}
-                    onChange={(next) => setSelected(next ? new Set(items.map((u) => u.id)) : new Set())}
-                  />
-                </Th>
                 <SortTh field="name" sort={sort} onSort={setSort}>Name</SortTh>
                 <SortTh field="email" sort={sort} onSort={setSort}>Email</SortTh>
                 <SortTh field="role" sort={sort} onSort={setSort} width="180px">Role</SortTh>
@@ -235,7 +218,6 @@ export default function UsersView({
               {loading && !error ? (
                 Array.from({ length: 8 }, (_, i) => (
                   <tr key={i} aria-busy>
-                    <Td><Bar w={16} h={16} r={5} /></Td>
                     <Td>
                       <span className={css({ display: "flex", alignItems: "center", gap: "10px" })}>
                         <Bar w={30} h={30} r={9} />
@@ -249,13 +231,13 @@ export default function UsersView({
                 ))
               ) : error ? (
                 <tr>
-                  <Td colSpan={5}>
+                  <Td colSpan={4}>
                     <EmptyState icon="x" title="Couldn't load users" body="WordPress didn't answer. Use Refresh to try again." />
                   </Td>
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <Td colSpan={5}>
+                  <Td colSpan={4}>
                     <EmptyState
                       icon="users"
                       title="No users match"
@@ -265,23 +247,8 @@ export default function UsersView({
                 </tr>
               ) : (
                 rows.map((u) => {
-                  const isSel = selected.has(u.id);
                   return (
-                    <Tr key={u.id} selected={isSel}>
-                      <Td>
-                        <Checkbox
-                          label={`Select ${u.name}`}
-                          checked={isSel}
-                          onChange={(next) =>
-                            setSelected((prev) => {
-                              const s = new Set(prev);
-                              if (next) s.add(u.id);
-                              else s.delete(u.id);
-                              return s;
-                            })
-                          }
-                        />
-                      </Td>
+                    <Tr key={u.id}>
                       <Td>
                         <span className={css({ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 })}>
                           <span
@@ -460,7 +427,7 @@ function NewUserDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
             <button type="button" onClick={onClose} className={css({ height: "36px", padding: "0 14px", borderRadius: "8px", fontSize: "13px", cursor: "pointer", transition: "border-color .12s", _hover: { borderColor: ac.borderStrong } })} style={fieldStyle}>
               Cancel
             </button>
-            <button type="submit" disabled={busy} className={css({ height: "36px", padding: "0 18px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", border: "none", color: "#fff", transition: "background .12s", _hover: { background: ac.accentHover } })} style={{ background: ac.accent, opacity: busy ? 0.7 : 1 }}>
+            <button type="submit" disabled={busy} className={css({ height: "36px", padding: "0 18px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", border: "none", color: "var(--colors-admin-accent-fg)", transition: "background .12s", _hover: { background: ac.accentHover } })} style={{ background: ac.accent, opacity: busy ? 0.7 : 1 }}>
               {busy ? "Creating…" : "Create user"}
             </button>
           </div>

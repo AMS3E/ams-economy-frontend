@@ -1,4 +1,4 @@
-// Raw response shapes from the AMS Infotainment WordPress REST API
+// Raw response shapes from the AMS Economy WordPress REST API
 // (namespace `wp/v2/web`). These are the ONLY place the API's field names live;
 // everything downstream uses the mapped domain types (ArticleRef, Article, …).
 // Verified against live responses on 2026-07-08.

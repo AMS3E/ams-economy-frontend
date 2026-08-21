@@ -49,8 +49,21 @@ interface LoginErr {
 }
 export type LoginResult = LoginOk | LoginErr;
 
-/** Turn WordPress's status codes into a message safe to show on the login form. */
-function loginMessage(status: number): string {
+/** Turn WordPress's login error contract into a message safe to show. */
+function loginMessage(status: number, code?: string): string {
+  switch (code) {
+    case "invalid_login":
+      return "Invalid username or password.";
+    case "no_access":
+      return "This account doesn't have dashboard access.";
+    case "too_many_attempts":
+      return "Too many attempts. Please wait 15 minutes and try again.";
+    case "insecure":
+      return "Login requires a secure (HTTPS) connection.";
+    case "bad_request":
+      return "Enter your username and password.";
+  }
+
   switch (status) {
     case 401:
       return "Invalid username or password.";
@@ -60,8 +73,13 @@ function loginMessage(status: number): string {
       return "Too many attempts. Please wait a few minutes and try again.";
     case 400:
       return "Login requires a secure (HTTPS) connection.";
+    // The current host replaces upstream 4xx responses with an HTML 404 page.
+    // Keep old plugin deployments actionable until the host-safe JSON error
+    // envelope from AMS Frontend API 1.9.2 is installed.
+    case 404:
+      return "Sign-in was rejected. Check your username, password, and dashboard access; after several attempts, wait 15 minutes.";
     default:
-      return "Couldn't sign in right now. Please try again.";
+      return "The login service returned an unexpected response. Please wait 15 minutes, then verify your WordPress username and dashboard access.";
   }
 }
 
@@ -84,11 +102,20 @@ export async function login(username: string, password: string): Promise<LoginRe
   }
 
   const json = (await res.json().catch(() => null)) as
-    | { token?: string; expires_at?: number; user?: SessionUser }
+    | {
+        status?: string;
+        code?: string;
+        message?: string;
+        http_status?: number;
+        token?: string;
+        expires_at?: number;
+        user?: SessionUser;
+      }
     | null;
 
-  if (!res.ok || !json?.token || !json.user) {
-    return { ok: false, status: res.status, message: loginMessage(res.status) };
+  if (!res.ok || json?.status === "error" || !json?.token || !json.user) {
+    const status = Number(json?.http_status) || res.status;
+    return { ok: false, status, message: loginMessage(status, json?.code) };
   }
   return {
     ok: true,

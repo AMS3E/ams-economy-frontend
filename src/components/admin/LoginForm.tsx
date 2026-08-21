@@ -4,6 +4,7 @@ import { useActionState } from "react";
 import { css } from "@/styled-system/css";
 import { loginAction } from "@/lib/auth/actions";
 import { ac } from "./tokens";
+import { BrandLockup } from "./brand";
 import { Surface, Field, Input, Button } from "./ui";
 
 export default function LoginForm() {
@@ -12,21 +13,11 @@ export default function LoginForm() {
   return (
     <Surface className={css({ width: "100%", maxWidth: "380px", borderRadius: "16px" })} style={{ boxShadow: ac.shadowMd }}>
       <form action={action} className={css({ padding: "32px" })}>
-        {/* Brand — the same lockup the sidebar carries, so the sign-in page and
-            the tool behind it are recognisably one product. */}
-        <div className={css({ display: "flex", alignItems: "center", gap: "9px", marginBottom: "18px" })}>
-          <span
-            className={css({ width: "28px", height: "28px", borderRadius: "8px", display: "grid", placeItems: "center", fontSize: "13px", fontWeight: 700, flex: "none" })}
-            style={{ background: ac.accent, color: ac.accentFg }}
-          >
-            A
-          </span>
-          <span className={css({ display: "flex", flexDirection: "column", lineHeight: 1.15 })}>
-            <span className={css({ fontWeight: 700, fontSize: "14px", letterSpacing: "-0.01em" })}>AMS</span>
-            <span className={css({ fontSize: "10.5px", letterSpacing: "0.07em", textTransform: "uppercase" })} style={{ color: ac.faint }}>
-              Infotainment
-            </span>
-          </span>
+        {/* Brand — literally the same lockup the sidebar carries (same asset,
+            same rendered width), so the sign-in page and the tool behind it are
+            recognisably one product. */}
+        <div className={css({ marginBottom: "20px" })}>
+          <BrandLockup />
         </div>
 
         <h1 className={css({ fontSize: "18px", fontWeight: 600, letterSpacing: "-0.01em" })}>Sign in</h1>

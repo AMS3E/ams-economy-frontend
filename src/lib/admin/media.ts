@@ -12,7 +12,7 @@ interface RawMedia {
   title?: { rendered?: string };
   source_url?: string;
   mime_type?: string;
-  media_type?: string; // "image" | "video" | "audio" | "file"
+  media_type?: string; // core only ever says "image" | "file" — see kindFromMime
   alt_text?: string;
   author?: number;
   media_details?: {
@@ -62,6 +62,14 @@ function displayDate(dt: string): string {
   return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : dt;
 }
 
+/** WordPress's `media_type` — REST core and fast.php alike — is only ever
+ *  'image' or 'file', so a video's is 'file' and every UI branch keyed on
+ *  type === 'video' silently never fires. The MIME root is the truth. */
+function kindFromMime(mime: string): string {
+  const root = (mime ?? "").split("/")[0];
+  return root === "image" || root === "video" || root === "audio" ? root : "file";
+}
+
 function map(m: RawMedia): MediaItem {
   const det = m.media_details ?? {};
   const sizes = det.sizes ?? {};
@@ -71,7 +79,7 @@ function map(m: RawMedia): MediaItem {
     url: m.source_url ?? "",
     thumb: sizes.thumbnail?.source_url ?? sizes.medium?.source_url ?? m.source_url ?? "",
     mime: m.mime_type ?? "",
-    type: m.media_type ?? "file",
+    type: kindFromMime(m.mime_type ?? ""),
     width: det.width ?? 0,
     height: det.height ?? 0,
     dims: det.width && det.height ? `${det.width} × ${det.height}` : "",
@@ -141,7 +149,7 @@ function mapFastMedia(m: FastMediaRow): MediaItem {
     url: m.url ?? "",
     thumb: m.thumb || m.url || "",
     mime: m.mime ?? "",
-    type: m.type ?? "file",
+    type: kindFromMime(m.mime ?? ""),
     width: m.width ?? 0,
     height: m.height ?? 0,
     dims: m.width && m.height ? `${m.width} × ${m.height}` : "",

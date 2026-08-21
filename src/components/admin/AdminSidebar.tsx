@@ -4,7 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { css } from "@/styled-system/css";
 import { ac } from "./tokens";
+import { BrandLockup } from "./brand";
 import { Icon, type IconName } from "./icons";
+import ThemeControl from "./ThemeControl";
+import AccountMenu, { type AccountUser } from "./AccountMenu";
 
 interface NavItem {
   label: string;
@@ -38,8 +41,8 @@ const GROUPS: NavGroup[] = [
     title: "Content",
     items: [
       { label: "Articles", href: "/admin/articles", icon: "articles" },
-      { label: "Media", href: "/admin/media", icon: "media" },
       { label: "Programs", href: "/admin/programs", icon: "programs" },
+      { label: "Media", href: "/admin/media", icon: "media" },
     ],
   },
   {
@@ -52,9 +55,13 @@ const GROUPS: NavGroup[] = [
       // everyone. manage_options is the closest cap in that list; every real
       // admin has both. Swap the day the plugin's list includes it.
       { label: "Menus", href: "/admin/menus", icon: "list", cap: "manage_options" },
+      // NO "SEO" entry, on the owner's call (2026-08-12): the Yoast metabox
+      // under the article covers the day-to-day, so the standalone workbench
+      // came out of the nav. The screens still exist at /admin/seo — put the
+      // item back here the day a bulk SEO pass is actually wanted.
       { label: "Users", href: "/admin/users", icon: "users", cap: "list_users" },
       { label: "Roles", href: "/admin/roles", icon: "eye", cap: "list_users" },
-      { label: "Settings", href: "/admin/settings", icon: "settings", cap: "manage_options" },
+      // { label: "Settings", href: "/admin/settings", icon: "settings", cap: "manage_options" },
     ],
   },
 ];
@@ -62,16 +69,28 @@ const GROUPS: NavGroup[] = [
 const navRow = css({
   display: "flex",
   alignItems: "center",
-  gap: "11px",
-  padding: "8px 11px",
-  borderRadius: "9px",
+  gap: "12px",
+  padding: "9px 12px",
+  borderRadius: "8px",
   cursor: "pointer",
-  fontSize: "13.5px",
+  fontSize: "14px",
   transition: "background .12s, color .12s",
   _hover: { background: "var(--colors-admin-surface-hover)" },
 });
 
-export default function AdminSidebar({ capabilities }: { capabilities: Record<string, boolean> }) {
+// Section heading: small, tracked-out uppercase. The size difference alone is
+// what makes eight items read as three labelled groups instead of one long list
+// — at body size a heading competes with the rows it is meant to be organising.
+const navHeading = css({
+  fontSize: "11px",
+  fontWeight: 600,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+  padding: "0 12px",
+  marginBottom: "6px",
+});
+
+export default function AdminSidebar({ capabilities, user }: { capabilities: Record<string, boolean>; user: AccountUser }) {
   const pathname = usePathname();
 
   const isActive = (item: NavItem) => {
@@ -79,13 +98,13 @@ export default function AdminSidebar({ capabilities }: { capabilities: Record<st
     // subtree (so /admin/articles/123 keeps "Articles" lit).
     if (item.href === "/admin") return pathname === "/admin";
     if (pathname === item.href || pathname.startsWith(item.href + "/")) return true;
-    return (item.also ?? []).some((p) => pathname.startsWith(p));
+    return (item.also ?? []).some(p => pathname.startsWith(p));
   };
 
-  const groups = GROUPS.map((g) => ({
+  const groups = GROUPS.map(g => ({
     ...g,
-    items: g.items.filter((item) => !item.cap || capabilities[item.cap] === true),
-  })).filter((g) => g.items.length > 0);
+    items: g.items.filter(item => !item.cap || capabilities[item.cap] === true),
+  })).filter(g => g.items.length > 0);
 
   return (
     <aside
@@ -99,36 +118,23 @@ export default function AdminSidebar({ capabilities }: { capabilities: Record<st
         height: "100vh",
         overflowY: "auto",
       })}
-      style={{ background: ac.surface, borderRight: `1px solid ${ac.border}` }}
-    >
-      {/* Brand */}
-      <div className={css({ display: "flex", alignItems: "center", gap: "9px", padding: "18px 20px 16px" })}>
-        <span
-          className={css({ width: "28px", height: "28px", borderRadius: "8px", display: "grid", placeItems: "center", fontSize: "13px", fontWeight: 700, flex: "none" })}
-          style={{ background: ac.accent, color: ac.accentFg }}
-        >
-          A
-        </span>
-        <span className={css({ display: "flex", flexDirection: "column", lineHeight: 1.15 })}>
-          <span className={css({ fontWeight: 700, fontSize: "14px", letterSpacing: "-0.01em" })}>AMS</span>
-          <span className={css({ fontSize: "10.5px", letterSpacing: "0.07em", textTransform: "uppercase" })} style={{ color: ac.faint }}>
-            Infotainment
-          </span>
-        </span>
+      style={{ background: ac.surface, borderRight: `1px solid ${ac.border}` }}>
+      {/* Brand — mark and name, left-aligned across the rail, closed off with a
+          rule so the identity block reads as the header of the nav rather than
+          as its first item. */}
+      <div className={css({ padding: "18px 16px 17px" })} style={{ borderBottom: `1px solid ${ac.border}` }}>
+        <BrandLockup />
       </div>
 
       {/* Grouped nav */}
-      <nav className={css({ display: "flex", flexDirection: "column", gap: "18px", padding: "4px 12px 20px" })}>
-        {groups.map((group) => (
+      <nav className={css({ display: "flex", flexDirection: "column", gap: "18px", padding: "16px 12px 20px" })}>
+        {groups.map(group => (
           <div key={group.title}>
-            <div
-              className={css({ fontSize: "10.5px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", padding: "0 11px", marginBottom: "6px" })}
-              style={{ color: ac.faint }}
-            >
+            <div className={navHeading} style={{ color: ac.faint }}>
               {group.title}
             </div>
             <div className={css({ display: "flex", flexDirection: "column", gap: "2px" })}>
-              {group.items.map((item) => {
+              {group.items.map(item => {
                 const active = isActive(item);
                 return (
                   <Link
@@ -137,11 +143,16 @@ export default function AdminSidebar({ capabilities }: { capabilities: Record<st
                     aria-current={active ? "page" : undefined}
                     className={navRow}
                     style={{
+                      // Selection carries the accent now. It was neutral while
+                      // the accent WAS neutral — back then `accentText` meant
+                      // "clickable", and colouring one row in a list where every
+                      // row is clickable said the wrong thing. With a teal
+                      // accent that ambiguity is gone, and the selected row is
+                      // marked three ways at once: hue, tint and weight.
                       color: active ? ac.accentText : ac.sub,
                       background: active ? ac.accentTint : undefined,
                       fontWeight: active ? 600 : 400,
-                    }}
-                  >
+                    }}>
                     <Icon name={item.icon} size={17} strokeWidth={active ? 1.9 : 1.6} style={{ flex: "none" }} />
                     <span>{item.label}</span>
                   </Link>
@@ -154,10 +165,21 @@ export default function AdminSidebar({ capabilities }: { capabilities: Record<st
 
       <div className={css({ flex: "1" })} />
 
-      {/* The old global "Refresh data" row is gone: every screen has its own
-          "Refresh · updated Xm ago" button, scoped to that screen's caches — a
-          global bust would cold-start everything at once. Identity moved to the
-          top bar with the restyle. */}
+      {/* Foot. The theme control and the account menu used to live in a sticky
+          top bar; that bar is gone and they sit here now, which is also where
+          the account menu originally was before the restyle moved it up.
+          `flex: none` so a long nav scrolls past them rather than squashing
+          them, and a rule above so the block reads as its own zone.
+
+          (No global "Refresh data" row — every screen has its own
+          "Refresh · updated Xm ago" scoped to that screen's caches; a global
+          bust would cold-start everything at once.) */}
+      <div
+        className={css({ flex: "none", display: "flex", flexDirection: "column", gap: "10px", padding: "12px" })}
+        style={{ borderTop: `1px solid ${ac.border}` }}>
+        <ThemeControl />
+        <AccountMenu user={user} />
+      </div>
     </aside>
   );
 }

@@ -31,20 +31,27 @@ const focusRing = css({
  * Surfaces
  * ========================================================================== */
 
+// FLAT. No radius, no border, no shadow — a surface is a plain block of colour
+// that runs to the edges of whatever contains it.
+//
+// It used to be a 14px rounded card with a hairline and a shadow. The whole
+// admin has moved to the panel composition the dashboard uses: panels butt
+// straight against each other and against the viewport, and the divisions are
+// drawn INSIDE them as rules (see `Cell`). A card border in that layout doubles
+// up against its neighbour's, and a radius leaves gaps at every junction. The
+// separation you can still see comes from `canvas` vs `surface`, which sit 1.07
+// apart on purpose.
 const surfaceBase = css({
-  borderRadius: "14px",
-  border: "1px solid var(--colors-admin-border)",
   background: "var(--colors-admin-surface)",
-  boxShadow: "var(--shadows-admin-sm)",
+  overflow: "hidden",
 });
 
+// Lift is gone with the shadow — there is nothing left to lift. A hoverable
+// surface now just warms its background, which is the only affordance that
+// still makes sense on a flat block.
 const surfaceHoverable = css({
-  transition: "box-shadow .18s ease, transform .18s ease, border-color .18s ease",
-  _hover: {
-    transform: "translateY(-2px)",
-    boxShadow: "var(--shadows-admin-md)",
-    borderColor: "var(--colors-admin-border-strong)",
-  },
+  transition: "background .14s ease",
+  _hover: { background: "var(--colors-admin-surface-hover)" },
 });
 
 /** The workhorse container. `hover` adds lift — TRUE for cards you click,
@@ -169,8 +176,12 @@ export function PageHeader({
   sub?: ReactNode;
   actions?: ReactNode;
 }) {
+  // This is the panel's top cell, not a bare fragment. With page padding gone,
+  // the header owns its own gutter and closes with a rule — which is what makes
+  // every screen open the same way the dashboard does, without each one
+  // re-deriving the spacing.
   return (
-    <>
+    <div className={cx(panelClass, css({ padding: "20px 22px" }))} style={{ borderBottom: `1px solid ${ac.border}` }}>
       {trail?.length ? <Breadcrumb trail={trail} /> : null}
       <div className={css({ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "16px", flexWrap: "wrap" })}>
         <PageTitle title={title} sub={sub} />
@@ -178,7 +189,7 @@ export function PageHeader({
           <div className={css({ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" })}>{actions}</div>
         ) : null}
       </div>
-    </>
+    </div>
   );
 }
 
@@ -465,12 +476,17 @@ export function SaveBar({
 export function Checkbox({
   checked,
   indeterminate = false,
+  disabled = false,
   onChange,
   label,
   className,
 }: {
   checked: boolean;
   indeterminate?: boolean;
+  /** A box the user must not tick right now — WordPress refusing sticky while a
+   *  password is set, say. Greyed and inert, but still announced, so the reason
+   *  beside it has something to refer to. */
+  disabled?: boolean;
   onChange: (next: boolean) => void;
   /** Accessible name — visually hidden in table headers and rows. */
   label: string;
@@ -483,6 +499,7 @@ export function Checkbox({
         type="checkbox"
         aria-label={label}
         checked={checked}
+        disabled={disabled}
         ref={(el) => {
           if (el) el.indeterminate = indeterminate && !checked;
         }}
@@ -501,6 +518,7 @@ export function Checkbox({
             transition: "background .12s, border-color .12s",
             _checked: { background: "var(--colors-admin-accent)", borderColor: "var(--colors-admin-accent)" },
             _indeterminate: { background: "var(--colors-admin-accent)", borderColor: "var(--colors-admin-accent)" },
+            _disabled: { opacity: 0.45, cursor: "not-allowed" },
           }),
         )}
       />
@@ -522,19 +540,26 @@ export function Segmented<T extends string | number>({
   onChange,
   size = "md",
   ariaLabel,
+  stretch = false,
 }: {
   value: T;
   options: { value: T; label: string }[];
   onChange: (v: T) => void;
   size?: ButtonSize;
   ariaLabel: string;
+  /** Fill the container and split evenly, instead of sizing to the labels.
+   *  For the sidebar foot, where the control should span the rail. */
+  stretch?: boolean;
 }) {
   const h = size === "sm" ? "26px" : "30px";
   return (
     <div
       role="group"
       aria-label={ariaLabel}
-      className={css({ display: "inline-flex", padding: "3px", borderRadius: "10px", gap: "2px", flex: "none" })}
+      className={cx(
+        css({ padding: "3px", borderRadius: "10px", gap: "2px" }),
+        stretch ? css({ display: "flex", width: "100%" }) : css({ display: "inline-flex", flex: "none" }),
+      )}
       style={{ background: ac.surfaceSunken }}
     >
       {options.map((o) => {
@@ -548,6 +573,7 @@ export function Segmented<T extends string | number>({
             className={cx(
               focusRing,
               css({ padding: "0 11px", borderRadius: "8px", fontSize: "12.5px", fontWeight: 500, cursor: "pointer", border: "none", transition: "background .12s, color .12s" }),
+              stretch ? css({ flex: "1", minWidth: 0 }) : undefined,
             )}
             style={
               active
@@ -603,8 +629,71 @@ export function Badge({ children, tone = "neutral", icon }: { children: ReactNod
   );
 }
 
-/** Table shell. Phoenix's density: a recessed header band with small
- *  letter-spaced labels, hairline row rules, clipped by the card's radius. */
+/* ========================================================================== *
+ * Panels — the admin's layout unit
+ * ========================================================================== */
+
+/** One surface, edge to edge, divided by rules rather than gutters.
+ *
+ *  This is the composition the whole tool uses: no page padding, no gaps
+ *  between panels, no radius. Breathing room lives INSIDE, in each `Cell`.
+ *  Originally private to DashboardScreen; promoted here so there is one
+ *  implementation and changing gutters is a one-line change again. */
+export const panelClass = css({ background: "var(--colors-admin-surface)", overflow: "hidden", minWidth: 0 });
+
+export function Panel({ children, className, style }: { children: ReactNode; className?: string; style?: CSSProperties }) {
+  return (
+    <div className={cx(panelClass, className)} style={style}>
+      {children}
+    </div>
+  );
+}
+
+/** A cell inside a `Panel`.
+ *
+ *  `right`/`bottom` draw the dividing rules, and you set them only where a
+ *  neighbour actually sits — that is what stops a panel drawing a rule against
+ *  its own outer edge, which is the thing that makes a gutterless grid look
+ *  like a mistake rather than a decision.
+ *
+ *  `padded={false}` for cells that hold something which owns its own padding —
+ *  a `Table`, a chart, a scrolling list. */
+export function Cell({
+  children,
+  right = false,
+  bottom = false,
+  span,
+  className,
+  style,
+  padded = true,
+}: {
+  children: ReactNode;
+  right?: boolean;
+  bottom?: boolean;
+  span?: string;
+  className?: string;
+  style?: CSSProperties;
+  padded?: boolean;
+}) {
+  return (
+    <div
+      className={className}
+      style={{
+        gridColumn: span,
+        padding: padded ? "20px 22px" : undefined,
+        borderRight: right ? `1px solid ${ac.border}` : undefined,
+        borderBottom: bottom ? `1px solid ${ac.border}` : undefined,
+        minWidth: 0,
+        ...style,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Table shell. Hairline row rules; the header is unfilled and marked out by
+ *  the rule beneath it. Sits in a `Cell` with `padded={false}`. */
 export function Table({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <div className={cx(css({ width: "100%", overflowX: "auto" }), className)}>
@@ -627,10 +716,15 @@ export function Th({
   return (
     <th
       className={cx(
-        css({ fontSize: "11px", fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", padding: "10px 14px", whiteSpace: "nowrap" }),
+        css({ fontSize: "11px", fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", padding: "12px 22px", whiteSpace: "nowrap" }),
         className,
       )}
-      style={{ width, textAlign: align, color: ac.muted, background: ac.surfaceSunken, borderBottom: `1px solid ${ac.border}` }}
+      // NO FILL. The header used to be a recessed grey band with `muted` labels
+      // on it — grey ink on a grey ground, which is why it was hard to read at
+      // 11px. It now sits on the same surface as the rows, marked out by the
+      // rule beneath it and by `sub` ink, which is a step darker than `muted`
+      // and clears 7.7:1 instead of 5.3:1.
+      style={{ width, textAlign: align, color: ac.sub, borderBottom: `1px solid ${ac.border}` }}
     >
       {children}
     </th>
@@ -653,7 +747,10 @@ export function Td({
   return (
     <td
       colSpan={colSpan}
-      className={cx(css({ padding: "12px 14px", verticalAlign: "middle" }), className)}
+      // 22px horizontal to match `Th` and the panel's own gutter — with the page
+      // padding gone, a 14px cell would leave the first column almost touching
+      // the sidebar.
+      className={cx(css({ padding: "12px 22px", verticalAlign: "middle" }), className)}
       style={{ textAlign: align, borderTop: `1px solid ${ac.rowLine}`, ...style }}
     >
       {children}
@@ -704,8 +801,9 @@ export function EmptyState({
 export function TableFooter({ children }: { children: ReactNode }) {
   return (
     <div
-      className={css({ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", padding: "11px 16px", fontSize: "12.5px", flexWrap: "wrap" })}
-      style={{ background: ac.surfaceSunken, borderTop: `1px solid ${ac.border}`, color: ac.muted }}
+      className={css({ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", padding: "12px 22px", fontSize: "12.5px", flexWrap: "wrap" })}
+      // Unfilled for the same reason as `Th` — the rule carries the boundary.
+      style={{ borderTop: `1px solid ${ac.border}`, color: ac.muted }}
     >
       {children}
     </div>

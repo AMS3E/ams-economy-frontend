@@ -1,4 +1,4 @@
-// Article data, backed by the AMS Infotainment WordPress REST API.
+// Article data, backed by the AMS Economy WordPress REST API.
 //
 // Components import the getters below (getArticle / getCategoryPage /
 // getArticleExtras); the getters call the API and map raw WP shapes into the

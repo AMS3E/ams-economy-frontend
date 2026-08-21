@@ -38,14 +38,21 @@ export const ac = {
    *  never use it for text a reader must be able to read comfortably. */
   faint: "var(--colors-admin-faint)",
 
-  /* ---- AMS red: primary actions + active nav ONLY ---- */
+  /* ---- accent: TEAL — the complement of the AMS mark ----
+   *  The mark runs violet → crimson → gold, so teal is the one strong hue that
+   *  cannot be mistaken for brand chrome, and it stays clear of `warn` (amber)
+   *  and `danger` (red) so an action never reads as a warning. It replaced AMS
+   *  red, then Strapi violet, then a neutral/violet split.
+   *  Full reasoning and the measured steps: the accent block in panda.config.ts. */
   accent: "var(--colors-admin-accent)",
   accentHover: "var(--colors-admin-accent-hover)",
-  /** Text/icon colour ON an accent fill. */
+  /** Text/icon colour ON an accent fill. Theme-aware: white on the light theme's
+   *  deep teal, near-black on the dark theme's brighter one. Never hardcode
+   *  white in its place — see the 13 buttons that had to be unpicked once. */
   accentFg: "var(--colors-admin-accent-fg)",
-  /** The accent used AS text or an icon on a surface. Not the same value as
-   *  `accent` in dark mode — a fill that clears AA on white does not on
-   *  near-black. */
+  /** A DEEPER teal than `accent` — as text, the fill value misses AA on
+   *  `surfaceSunken`. For clickable text; navigation, selection and avatars take
+   *  `text` on `accentTint`. */
   accentText: "var(--colors-admin-accent-text)",
   accentTint: "var(--colors-admin-accent-tint)",
 
@@ -92,10 +99,10 @@ export const ac = {
  *  background of its own, so a published article inherits `page.bg`: #ffffff
  *  in light, #0e0e12 in dark.
  *
- *  Why not `ac.surface`: in light mode the two are the same #FFFFFF and the
- *  difference never shows — then dark mode arrives and the sheet quietly drifts
- *  to the admin's #131926, a full step lighter than any article the reader will
- *  ever see. The point of the sheet is fidelity; borrow the real token. */
+ *  Why not `ac.surface`: the admin's surfaces are WARM (cream in light, a warm
+ *  near-black in dark) while the public article sheet is neutral. Borrowing the
+ *  admin token would preview every article on a ground no reader ever sees, and
+ *  the whole point of the sheet is fidelity. Borrow the real token. */
 export const publishedPageBg = "var(--colors-page-bg)";
 
 /** The four categorical slots, in fixed order. Assign by ENTITY and never

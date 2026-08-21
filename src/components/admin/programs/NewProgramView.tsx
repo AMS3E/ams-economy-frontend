@@ -10,6 +10,7 @@ import { BentoCard } from "../ui";
 import ProgramDetailsForm from "./ProgramDetailsForm";
 import type { Collector } from "./ProgramEditContext";
 import { createProgramAction } from "@/lib/admin/program-actions";
+import { startLegacyRefresh } from "../LegacySiteChip";
 
 // The Create-Program flow: header + slug card + the shared Details form
 // (registered via onCollect — create mode has no ProgramEditContext).
@@ -60,6 +61,11 @@ export default function NewProgramView() {
         setError(res.error ?? "Couldn't create the program.");
         return;
       }
+      // "Create & publish" puts a brand-new page on the legacy site, so its
+      // listings (homepage, archive, landing pages) go stale the same as an
+      // article publish. Fire-and-forget — survives the navigation; the chip
+      // in the editor we land on picks the run up (same postId).
+      if (status === "publish") startLegacyRefresh(res.id);
       router.push(`/admin/programs/${res.id}`);
     } catch {
       setError("Request failed — check the server console.");
@@ -94,7 +100,7 @@ export default function NewProgramView() {
             type="button"
             disabled={busy !== null}
             onClick={() => void create("publish")}
-            className={css({ height: "34px", padding: "0 18px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", border: "none", color: "#fff", boxShadow: ac.shadowSm, transition: "background .12s", _hover: { background: ac.accentHover } })}
+            className={css({ height: "34px", padding: "0 18px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", border: "none", color: "var(--colors-admin-accent-fg)", boxShadow: ac.shadowSm, transition: "background .12s", _hover: { background: ac.accentHover } })}
             style={{ background: ac.accent, opacity: busy ? 0.7 : 1 }}
           >
             {busy === "publish" ? "Publishing…" : "Create & publish"}

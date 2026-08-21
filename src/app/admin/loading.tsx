@@ -11,7 +11,7 @@ import { Bar, SkeletonKeyframes } from "@/components/admin/Skeleton";
 // for the first paint of a navigation, and a close-enough shape beats nothing.
 export default function AdminLoading() {
   return (
-    <div className={css({ padding: "32px 40px 48px" })} aria-busy>
+    <div className={css({ padding: "20px 22px" })} aria-busy>
       <Bar w={180} h={22} />
       <div style={{ marginTop: 10 }}>
         <Bar w={120} h={13} />

@@ -46,24 +46,6 @@ import { addMenuItem, deleteMenuItem, renameMenuItem, reorderMenuItems, setMenuI
 // live theme itself emits, already at the item's chosen rendition, so it needs
 // no second lookup to turn an attachment id into the right-sized URL.
 
-/** Native <select> on the shared control geometry — see the note in
- *  SettingsForm: inside a form the browser's own picker beats a custom menu. */
-const selectClass = css({
-  height: "36px",
-  padding: "0 10px",
-  borderRadius: "9px",
-  fontSize: "13px",
-  fontFamily: "inherit",
-  cursor: "pointer",
-  maxWidth: "320px",
-  color: "var(--colors-admin-text)",
-  background: "var(--colors-admin-surface-sunken)",
-  border: "1px solid var(--colors-admin-border)",
-  transition: "border-color .13s ease",
-  _hover: { borderColor: "var(--colors-admin-border-strong)" },
-  _focusVisible: { outline: "2px solid var(--colors-admin-focus)", outlineOffset: "2px" },
-});
-
 /** Inline cell editor — a text input that fills its cell without the standard
  *  36px control chrome, so a row does not grow when you click into it. */
 const cellInput = css({
@@ -95,7 +77,6 @@ const cellButton = css({
 });
 
 export default function MenuManager({
-  menus,
   menu,
   items,
   loading,
@@ -103,10 +84,8 @@ export default function MenuManager({
   fetchedAt,
   refreshing,
   onRefresh,
-  onSelectMenu,
   onMutated,
 }: {
-  menus: MenuSummary[];
   menu: MenuSummary | null;
   items: MenuItem[];
   loading: boolean;
@@ -114,7 +93,6 @@ export default function MenuManager({
   fetchedAt: number | undefined;
   refreshing: boolean;
   onRefresh: () => void;
-  onSelectMenu: (slug: string) => void;
   onMutated: () => void;
 }) {
   // Local order, so moving a row feels instant instead of waiting on a ~1s
@@ -227,9 +205,8 @@ export default function MenuManager({
   };
 
   return (
-    <div className={css({ padding: "28px 32px 48px", maxWidth: "1440px" })}>
+    <div>
       <PageHeader
-        trail={[{ label: "Site" }, { label: "Menus" }]}
         title="Menus"
         sub="The public site’s navigation. Changes here also change the WordPress site — it is the same menu."
         actions={
@@ -242,51 +219,34 @@ export default function MenuManager({
         }
       />
 
-      {/* Filters: which menu everything below is scoped to. */}
-      <div className={css({ display: "flex", alignItems: "center", gap: "10px", marginTop: "20px", flexWrap: "wrap" })}>
-        <label className={css({ display: "flex", alignItems: "center", gap: "8px", fontSize: "12.5px" })} style={{ color: ac.muted }}>
-          Menu
-          <select value={menu?.slug ?? ""} onChange={(e) => onSelectMenu(e.target.value)} className={selectClass}>
-            {menus.map((m) => (
-              <option key={m.id} value={m.slug}>
-                {m.name}
-                {m.locations.length ? ` · ${m.locations.join(", ")}` : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
+      <Surface>
       {/* The strip as the site actually draws it — the point of reference for
           every edit below. */}
       <FormCard
         title="Preview"
         sub="How the icon strip renders on the public site."
-        className={css({ marginTop: "16px" })}
-        bodyClassName={css({ padding: "16px 20px" })}
+        className={css({ borderBottom: "1px solid var(--colors-admin-border)" })}
+        bodyClassName={css({ padding: "16px 22px" })}
       >
         {loading ? (
           <div className={css({ display: "flex", gap: "18px" })}>
             {Array.from({ length: 8 }, (_, i) => (
-              <Bar key={i} w={54} h={30} />
+              <Bar key={i} w={72} h={52} />
             ))}
             <SkeletonKeyframes />
           </div>
         ) : (
           <div className={css({ display: "flex", alignItems: "center", gap: "18px", overflowX: "auto", paddingBottom: "6px" })}>
             {order.map((it) => (
-              <span key={it.id} className={css({ display: "flex", alignItems: "center", gap: "7px", flex: "none" })} title={it.label}>
+              <span key={it.id} className={css({ display: "flex", alignItems: "center", flex: "none" })} title={it.label}>
                 {it.icon ? (
                   // eslint-disable-next-line @next/next/no-img-element -- the CMS's own absolute CDN URLs, previewed at their natural size
-                  <img src={it.icon} alt="" className={css({ height: "26px", width: "auto", objectFit: "contain" })} />
+                  <img src={it.icon} alt={it.label} className={css({ height: "52px", width: "auto", objectFit: "contain" })} />
                 ) : (
                   <span className={css({ fontSize: "11px", padding: "3px 7px", borderRadius: "5px" })} style={{ background: ac.surfaceSunken, color: ac.faint, border: `1px dashed ${ac.border}` }}>
                     no icon
                   </span>
                 )}
-                <span className={css({ fontSize: "12.5px", whiteSpace: "nowrap" })} style={{ color: ac.sub }}>
-                  {it.label}
-                </span>
               </span>
             ))}
           </div>
@@ -294,7 +254,7 @@ export default function MenuManager({
       </FormCard>
 
       {adding ? (
-        <Surface style={{ marginTop: "16px", padding: "14px 16px" }}>
+        <div className={css({ padding: "14px 22px" })} style={{ borderBottom: `1px solid ${ac.border}` }}>
           <div className={css({ display: "flex", gap: "8px", alignItems: "flex-end", flexWrap: "wrap" })}>
             <div className={css({ flex: 1, minWidth: "180px", maxWidth: "260px" })}>
               <div className={css({ fontSize: "12.5px", fontWeight: 500, marginBottom: "6px" })} style={{ color: ac.sub }}>Label</div>
@@ -317,26 +277,25 @@ export default function MenuManager({
             </Button>
             <Button onClick={() => setAdding(false)}>Cancel</Button>
           </div>
-        </Surface>
+        </div>
       ) : null}
 
-      <p className={css({ fontSize: "12px", marginTop: "16px", padding: "10px 13px", borderRadius: "9px", lineHeight: 1.6 })} style={{ color: ac.muted, background: ac.surfaceSunken, border: `1px solid ${ac.border}` }}>
+      <p className={css({ fontSize: "12px", padding: "10px 22px", lineHeight: 1.6 })} style={{ color: ac.muted, background: ac.surfaceSunken, borderBottom: `1px solid ${ac.border}` }}>
         <strong style={{ color: ac.sub, fontWeight: 600 }}>Click an icon to change it.</strong>{" "}
         Icons are the item&rsquo;s featured image in WordPress, so a change here shows on both sites. An item with no
         icon still appears in WordPress&rsquo;s own menu, but the public strip skips it — the strip is icons.
       </p>
 
       {error ? (
-        <p role="alert" className={css({ fontSize: "12.5px", marginTop: "12px", padding: "9px 11px", borderRadius: "9px" })} style={{ color: ac.danger, background: ac.dangerTint, border: `1px solid ${ac.danger}` }}>
+        <p role="alert" className={css({ fontSize: "12.5px", padding: "10px 22px" })} style={{ color: ac.danger, background: ac.dangerTint, borderBottom: `1px solid ${ac.danger}` }}>
           {error}
         </p>
       ) : null}
 
-      <Surface style={{ marginTop: "16px", overflow: "hidden" }}>
         <Table>
           <thead>
             <tr>
-              <Th width="72px">Icon</Th>
+              <Th width="112px">Icon</Th>
               <Th>Label</Th>
               <Th>Link</Th>
               <Th width="190px" align="right" />
@@ -385,8 +344,7 @@ export default function MenuManager({
                       title={it.icon ? "Change icon" : "Add icon"}
                       className={css({
                         width: "40px",
-                        height: "34px",
-                        borderRadius: "8px",
+                        height: "40px",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
@@ -403,7 +361,7 @@ export default function MenuManager({
                     >
                       {it.icon ? (
                         // eslint-disable-next-line @next/next/no-img-element -- same CDN URLs as the preview
-                        <img src={it.icon} alt="" className={css({ height: "26px", width: "auto", maxWidth: "36px", objectFit: "contain" })} />
+                        <img src={it.icon} alt="" className={css({ width: "40px", height: "40px", objectFit: "contain" })} />
                       ) : (
                         <Icon name="plus" size={13} strokeWidth={2} />
                       )}

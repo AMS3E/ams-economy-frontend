@@ -131,34 +131,61 @@ export default defineConfig({
            *    carries no information a control's border would.
            * ================================================================ */
           admin: {
-            // Surfaces. Cool slate rather than the old warm stone: the single
-            // biggest reason the tool reads "product dashboard" now.
-            canvas: { value: { base: "#F6F7F9", _dark: "#0B0F17" } },
-            surface: { value: { base: "#FFFFFF", _dark: "#131926" } },
-            surfaceHover: { value: { base: "#F6F7F9", _dark: "#1A2231" } },
-            surfaceSunken: { value: { base: "#F0F2F5", _dark: "#0F1520" } },
-            rowLine: { value: { base: "#EDEFF3", _dark: "#1F2836" } },
-            border: { value: { base: "#E2E6EB", _dark: "#263041" } },
-            borderStrong: { value: { base: "#C8CFD8", _dark: "#3A465A" } },
+            // Surfaces. NEUTRAL — no hue cast in either direction (saturation
+            // ~0.06, which is as close to grey as 8-bit hex gets).
+            //
+            // This palette has now been cool slate, then warm cream, and landed
+            // here. Both of the first two were wrong for the same underlying
+            // reason: a tinted neutral takes a position relative to the logo, and
+            // the AMS mark spans violet → crimson → gold, so ANY cast either
+            // fights part of it (cool slate against the warm end) or muddies
+            // against it (cream reading as beige). A true neutral takes no
+            // position at all, which is exactly what you want under a
+            // multi-hue mark — the logo supplies the colour, the shell supplies
+            // the quiet. Do not re-tint these.
+            canvas: { value: { base: "#F7F7F8", _dark: "#0C0C0E" } },
+            surface: { value: { base: "#FFFFFF", _dark: "#151518" } },
+            surfaceHover: { value: { base: "#F3F3F5", _dark: "#1E1E22" } },
+            surfaceSunken: { value: { base: "#EEEEF0", _dark: "#09090B" } },
+            rowLine: { value: { base: "#EEEEF0", _dark: "#252528" } },
+            border: { value: { base: "#E3E3E6", _dark: "#2C2C30" } },
+            borderStrong: { value: { base: "#C7C7CC", _dark: "#46464C" } },
 
-            // Ink. `faint` is decorative/placeholder — but it also carries
-            // chart axis labels, which is why it clears 3:1 rather than
-            // sitting at the old palette's ~2.6:1.
-            text: { value: { base: "#0F172A", _dark: "#E9EEF6" } },
-            sub: { value: { base: "#475569", _dark: "#B3C0D1" } },
-            muted: { value: { base: "#5B6A7D", _dark: "#8B99AC" } },
-            faint: { value: { base: "#7D8CA1", _dark: "#6B7C93" } },
+            // Ink — neutral greys, measured against ALL FOUR surfaces above, not
+            // just one. `faint` is decorative/placeholder, but it also carries
+            // chart axis labels, so it clears 3:1; #888892 rather than a lighter
+            // step because anything lighter drops to 2.91 on `surfaceSunken`.
+            text: { value: { base: "#18181B", _dark: "#F4F4F5" } },
+            sub: { value: { base: "#52525B", _dark: "#C0C0C6" } },
+            muted: { value: { base: "#6B6B75", _dark: "#96969E" } },
+            faint: { value: { base: "#888892", _dark: "#75757D" } },
 
-            // AMS red — primary actions and active nav ONLY. Both reference
-            // templates are blue because they are generic products with no
-            // brand; adopting that would be wearing someone else's identity.
-            accent: { value: { base: "#C8102E", _dark: "#D91E3B" } },
-            accentHover: { value: { base: "#A90D27", _dark: "#EE2E4B" } },
-            accentFg: { value: { base: "#FFFFFF", _dark: "#FFFFFF" } },
-            // The accent used AS text/icon on a surface — a fill colour that
-            // clears 4.5:1 on white does not on near-black, so dark lifts it.
-            accentText: { value: { base: "#C8102E", _dark: "#FF8095" } },
-            accentTint: { value: { base: "rgba(200,16,46,0.06)", _dark: "rgba(217,30,59,0.16)" } },
+            // TEAL — one accent again, for fills, selection AND clickable text.
+            //
+            // The history is worth keeping, because each step was a real answer
+            // to a real problem and the next one only makes sense against it:
+            // AMS red (collided with `danger`), then Strapi violet, then a split
+            // of neutral fills with violet ink. The split existed because a
+            // NEUTRAL accent renders link text at 1.00:1 against body text —
+            // pixel-identical, undiscoverable, a WCAG 1.4.1 failure. A coloured
+            // accent does not have that problem, so the split is unnecessary
+            // here and the palette collapses back to one hue.
+            //
+            // Teal, specifically, because it is the complement of a mark that
+            // runs violet → crimson → gold. It is the one strong hue that cannot
+            // be mistaken for brand chrome, and it stays clear of `warn` (amber)
+            // and `danger` (red), so an action never reads as a warning.
+            //
+            // `accentText` is a DEEPER step than the fill: #0E7C7B as text drops
+            // to 4.35 on `surfaceSunken`, which misses AA. The fill does not care
+            // — it is measured against the white on top of it, not the page.
+            accent: { value: { base: "#0E7C7B", _dark: "#17A8A4" } },
+            accentHover: { value: { base: "#0A6160", _dark: "#22C3BE" } },
+            // Theme-aware: white on the light fill, near-black on the brighter
+            // dark fill. Never hardcode white in its place.
+            accentFg: { value: { base: "#FFFFFF", _dark: "#0B0A0C" } },
+            accentText: { value: { base: "#0B6664", _dark: "#5EEAD4" } },
+            accentTint: { value: { base: "rgba(14,124,123,0.08)", _dark: "rgba(23,168,164,0.16)" } },
 
             // Status. Colour INFORMS; it is never the only channel — every use
             // ships with a label, and usually an icon.
@@ -171,21 +198,32 @@ export default defineConfig({
             // Destructive BUTTON fill, which needs white on it at 4.5:1 — the
             // dark `danger` above is a text step and is far too light for that.
             dangerFill: { value: { base: "#B42318", _dark: "#C4362E" } },
-            neutralTint: { value: { base: "rgba(71,85,105,0.08)", _dark: "rgba(179,192,209,0.12)" } },
+            neutralTint: { value: { base: "rgba(107,107,117,0.08)", _dark: "rgba(192,192,198,0.12)" } },
 
-            // Data. Slot 1 is the teal the charts already use; 2–4 exist so a
-            // multi-series chart or a set of tinted chips has a validated set
-            // to draw from instead of inventing hues at the call site.
-            data: { value: { base: "#0D9488", _dark: "#12A899" } },
-            dataSoft: { value: { base: "rgba(13,148,136,0.12)", _dark: "rgba(18,168,153,0.18)" } },
+            // Data. Slot 1 deliberately sits in the SAME teal family as the
+            // accent — one cool hue for the whole tool rather than an accent and
+            // an unrelated chart colour arguing with each other. It is a step
+            // deeper and less green than the old #0D9488: on cool slate that
+            // read as a minty wash, which is most of why the charts felt
+            // generic. The hue was never really the problem — a cool mint on a
+            // cool grey ground was.
+            //
+            // Warm hues were considered for this and rejected: amber already
+            // means `warn` and red already means `danger`, so a chart drawn in
+            // the brand's own orange stops being readable as data.
+            data: { value: { base: "#0E7C7B", _dark: "#2FB8B2" } },
+            dataSoft: { value: { base: "rgba(14,124,123,0.12)", _dark: "rgba(47,184,178,0.18)" } },
             cat2: { value: { base: "#2563EB", _dark: "#2563EB" } },
             cat3: { value: { base: "#D97706", _dark: "#D97706" } },
             cat4: { value: { base: "#A21CAF", _dark: "#AE2ABE" } },
 
-            focus: { value: { base: "#C8102E", _dark: "#FF8095" } },
-            overlay: { value: { base: "rgba(15,23,42,0.45)", _dark: "rgba(0,0,0,0.62)" } },
-            skeletonBase: { value: { base: "#EDEFF3", _dark: "#1A2231" } },
-            skeletonSheen: { value: { base: "#F6F7F9", _dark: "#222C3C" } },
+            // Tracks `accentText`, so focus is unmistakably the interaction
+            // colour. Clears the 3:1 WCAG 1.4.11 asks of a non-text indicator
+            // against surface, canvas and sunken in both themes.
+            focus: { value: { base: "#0B6664", _dark: "#5EEAD4" } },
+            overlay: { value: { base: "rgba(24,24,27,0.45)", _dark: "rgba(0,0,0,0.62)" } },
+            skeletonBase: { value: { base: "#EEEEF0", _dark: "#1E1E22" } },
+            skeletonSheen: { value: { base: "#F7F7F8", _dark: "#28282D" } },
           },
         },
       },

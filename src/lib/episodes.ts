@@ -182,7 +182,7 @@ function mapEpisode(e: WpEpisode): Episode {
 function fetchPage(tvShowId: number, page: number) {
   return apiFetch<WpListEnvelope<WpEpisode>>(
     `/wp/v2/web/tv-show-episodes?tv_show=${tvShowId}&page_no=${page}&page_size=${PAGE_SIZE}`,
-    { revalidate: 3600, tags: ["episodes", `tv-show:${tvShowId}`] },
+    { revalidate: false, tags: ["episodes", "program", `tv-show:${tvShowId}`] },
   );
 }
 
@@ -372,7 +372,16 @@ function parseEpisodeRailHtml(html: string): RailEpisode[] {
     href,
     thumbnail: thumb.replace(SIZE_SUFFIX_RE, ""),
     title: decodeEntities(title).trim(),
-    label: href.match(/\/(s\d+e\d+)\/?$/i)?.[1].toUpperCase().replace(/^S(\d+)E(\d+)$/, "S$1:E$2") ?? "",
+    label: (() => {
+      const permalink = href.match(/\/(s\d+e\d+)\/?$/i)?.[1];
+      if (permalink) return permalink.toUpperCase().replace(/^S(\d+)E(\d+)$/, "S$1:E$2");
+
+      // Some watch pages keep every row on the same program URL and switch
+      // videos by data-ep. Their artwork still carries the canonical pair,
+      // e.g. ORESS01_EP20_EWEP.jpg.
+      const artwork = thumb.match(/S(\d+)[_-]?EP(\d+)/i);
+      return artwork ? `S${Number(artwork[1])}:E${Number(artwork[2])}` : "";
+    })(),
     // PHP templates indent the text around `Added:` with tabs/newlines. Collapse
     // that formatting whitespace so the React row receives one clean sentence.
     meta: decodeEntities(meta).replace(/\s+/g, " ").trim(),
@@ -405,23 +414,38 @@ function parseSeasonIndexes(dropdownHtml: string): number[] {
 function fetchSeasonFragment(showId: number, season?: number) {
   const q = season === undefined ? "" : `&season=${season}`;
   return apiFetch<WpEpisodeRail>(`/wp/v2/khmer-insider-episode?show_id=${showId}${q}`, {
-    revalidate: 3600,
-    tags: ["episodes", `tv-show:${showId}`],
+    revalidate: false,
+    tags: ["episodes", "program", `tv-show:${showId}`],
   });
 }
 
-/** A show's ENTIRE episode history as a decorative rail, newest first — read
- *  from the plugin's pre-rendered episode-list fragment: `GET
- *  /wp/v2/khmer-insider-episode?show_id=<id>[&season=<idx>]`. Despite the
- *  route's name this endpoint is generic — keyed by `show_id`, and the same
- *  one every program's own live episode page calls (verified 2026-08-12:
- *  Financial Street's page inlines the identical `restUrl` with
- *  `showId:"88448"`).
+/** The current Economy deployment has no khmer-insider-episode route, but the
+ * canonical tv_show page server-renders the same episode-list markup. Resolve
+ * its custom permalink through core REST rather than guessing it. */
+async function fetchShowPageRail(showId: number): Promise<RailEpisode[]> {
+  const show = await apiFetch<{ link?: string }>(`/wp/v2/tv_show/${showId}?_fields=link`, {
+    revalidate: false,
+    tags: ["episodes", "program", `tv-show:${showId}`],
+  });
+  if (!show.link) return [];
+
+  const page = await fetch(show.link, {
+    next: { revalidate: false, tags: ["episodes", "program", `tv-show:${showId}`] },
+  });
+  if (!page.ok) return [];
+  return parseEpisodeRailHtml(await page.text()).sort(compareRailEpisodesDesc);
+}
+
+/** A show's episode history as a decorative rail, newest first. The canonical
+ *  tv_show page is authoritative on the current Economy deployment and embeds
+ *  the rows in its server HTML. Older deployments used the plugin fragment:
+ *  `GET /wp/v2/khmer-insider-episode?show_id=<id>[&season=<idx>]`; that remains
+ *  the compatibility fallback below.
  *
  *  This is a SEPARATE endpoint from fetchShowEpisodes' `tv-show-episodes`
  *  list, which answers a styled 404 on this backend (see AUDIT.md's
- *  corrections section) — this one works, but hands back an HTML fragment
- *  instead of structured JSON, hence the regex parse instead of `env.data`.
+ *  corrections section). Both working rail sources hand back HTML rather than
+ *  structured JSON, hence the regex parse instead of `env.data`.
  *
  *  One call with no `season` param returns only ONE bucket (the newest), not
  *  the whole show — a first version of this function stopped there and came
@@ -446,6 +470,16 @@ function fetchSeasonFragment(showId: number, season?: number) {
  *  Returns [] on any failure — this is a homepage shelf beside a dozen
  *  others, never the reason the page exists. */
 export async function fetchEpisodeRail(showId: number): Promise<{ episodes: RailEpisode[] }> {
+  // Prefer the canonical show page: it is deployed everywhere this app reads,
+  // while the fragment route is currently absent on Economy. Keeping the
+  // fragment as a fallback preserves compatibility with older deployments.
+  try {
+    const episodes = await fetchShowPageRail(showId);
+    if (episodes.length) return { episodes };
+  } catch {
+    // Fall through to the legacy fragment endpoint below.
+  }
+
   try {
     const first = await fetchSeasonFragment(showId);
     const indexes = parseSeasonIndexes(first.season_dropdown_html ?? "");
@@ -478,9 +512,34 @@ export interface LegacyEpisodeMedia {
  * is absent on a WordPress deployment: the live page still embeds the real
  * Vimeo player, so a missing API must not turn a playable episode into a fake
  * poster control. */
-export async function fetchLegacyEpisodeMedia(episodeHref: string): Promise<LegacyEpisodeMedia> {
+export async function fetchLegacyEpisodeMedia(episodeHref: string, episodeId?: number): Promise<LegacyEpisodeMedia> {
+  if (episodeId) {
+    try {
+      const detail = await apiFetch<{ id?: number | null; image_url?: string; vimeo_id?: string }>(
+        `/wp/v2/post-details-episode?id=${episodeId}`,
+        { revalidate: false, tags: ["episodes", `episode:${episodeId}`] },
+      );
+      if (detail.id && detail.vimeo_id) {
+        return {
+          video: toVideo({
+            choice: "episode_url",
+            url: `https://vimeo.com/${detail.vimeo_id}`,
+            attachment: "",
+            embed: "",
+          }),
+          cover: detail.image_url ?? "",
+        };
+      }
+    } catch {
+      // Older deployments lack this route; keep the page parser as fallback.
+    }
+  }
+
   try {
-    const page = await fetch(episodeHref, { next: { revalidate: 3600, tags: ["episodes"] } });
+    // This helper also reads movie pages when a program embeds its Vimeo player
+    // directly. Either kind of WordPress save must invalidate the cached media.
+    const mediaTags = ["episodes", "program"];
+    const page = await fetch(episodeHref, { next: { revalidate: false, tags: mediaTags } });
     if (!page.ok) return { video: null, cover: "" };
 
     const html = await page.text();
@@ -497,7 +556,7 @@ export async function fetchLegacyEpisodeMedia(episodeHref: string): Promise<Lega
 
     const oembed = await fetch(
       `https://vimeo.com/api/oembed.json?url=${encodeURIComponent(`https://vimeo.com/${videoId}`)}&width=1280`,
-      { next: { revalidate: 86400, tags: ["episodes"] } },
+      { next: { revalidate: false, tags: mediaTags } },
     );
     if (!oembed.ok) return { video, cover: "" };
 

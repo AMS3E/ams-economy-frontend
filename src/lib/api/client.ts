@@ -1,4 +1,4 @@
-// Low-level HTTP client for the AMS Infotainment WordPress REST API.
+// Low-level HTTP client for the AMS Economy WordPress REST API.
 // All calls are server-side (Server Components / Route Handlers), so the base
 // URL stays a server-only env var and the browser never sees it.
 
@@ -15,8 +15,8 @@ export class ApiError extends Error {
 }
 
 export interface CacheOpts {
-  /** Seconds before the cached response is revalidated (ISR). */
-  revalidate: number;
+  /** Seconds before ISR revalidation, or false to cache until a tag is invalidated. */
+  revalidate: number | false;
   /** Cache tags for on-demand invalidation via /api/revalidate. */
   tags?: string[];
 }
@@ -27,7 +27,8 @@ export interface CacheOpts {
  *
  * Every public read is ISR-cached, so a failed fetch is not a momentary blip:
  * whatever it renders is WRITTEN INTO A STATIC PAGE and served for the full
- * revalidate window — an hour here, or until the publish webhook busts the tag.
+ * revalidate window — an hour on most routes, or indefinitely on Program,
+ * unless the publish webhook busts the tag.
  * That makes `catch -> []` a decision about what to PUBLISH, and it is right for
  * only one of the three kinds of read this site makes:
  *

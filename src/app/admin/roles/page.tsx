@@ -14,7 +14,7 @@ export default async function AdminRolesPage() {
 
   if (!can(session.user, "list_users")) {
     return (
-      <div className={css({ padding: "48px 40px" })}>
+      <div className={css({ padding: "20px 22px" })}>
         <h1 className={css({ fontSize: "20px", fontWeight: 600 })}>Role Management</h1>
         <p className={css({ fontSize: "13px", marginTop: "8px" })} style={{ color: ac.muted }}>
           Your account doesn&rsquo;t have permission to view roles.

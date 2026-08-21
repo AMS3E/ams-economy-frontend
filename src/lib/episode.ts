@@ -34,7 +34,7 @@ function formatDuration(seconds: number): string {
 async function fetchVimeoRunTime(videoUrl: string): Promise<string> {
   try {
     const res = await fetch(`https://vimeo.com/api/oembed.json?url=${encodeURIComponent(videoUrl)}`, {
-      next: { revalidate: 86400, tags: ["episodes"] },
+      next: { revalidate: false, tags: ["episodes"] },
     });
     if (!res.ok) return "";
     const { duration } = (await res.json()) as { duration?: number };
@@ -87,7 +87,7 @@ export interface EpisodePreview {
 async function fetchDetail(id: number): Promise<WpEpisodeDetail | null> {
   try {
     const env = await apiFetch<WpObjectEnvelope<WpEpisodeDetail>>(`/wp/v2/web/episode?id=${id}`, {
-      revalidate: 3600,
+      revalidate: false,
       tags: ["episodes", `episode:${id}`],
     });
     return env.data ?? null;
@@ -102,7 +102,7 @@ async function fetchDetail(id: number): Promise<WpEpisodeDetail | null> {
 async function fetchExcerpt(id: number): Promise<string> {
   try {
     const raw = await apiFetch<{ excerpt?: { rendered?: string } }>(`/wp/v2/episode/${id}?_fields=excerpt`, {
-      revalidate: 3600,
+      revalidate: false,
       tags: ["episodes", `episode:${id}`],
     });
     return raw.excerpt?.rendered ?? "";

@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { css } from "@/styled-system/css";
 import { ac } from "./tokens";
 import { Icon } from "./icons";
@@ -10,10 +12,66 @@ export interface Option {
   value: string;
 }
 
+/** Where an open menu is drawn, in VIEWPORT coordinates — the menu is
+ *  `position: fixed` inside a portal, so these are the final numbers. */
+interface MenuBox {
+  top?: number;
+  bottom?: number;
+  left?: number;
+  right?: number;
+  maxHeight: number;
+  maxWidth: number;
+}
+
+const GAP = 6; // menu ↔ trigger
+const EDGE = 12; // menu ↔ viewport edge
+const MIN_PANEL = 160; // below this, opening downwards isn't worth it
+const MAX_PANEL = 420; // a menu the full height of the screen reads as a page
+
+/**
+ * Position the menu against the trigger's rect.
+ *
+ * Both axes are solved here rather than in CSS, because the menu can no longer
+ * be laid out relative to the button: it renders in a portal (see below).
+ * Vertically it flips above the trigger when there is more room there, and
+ * always carries a max-height, so a 26-category / 30-author list scrolls inside
+ * itself instead of running off the screen. Horizontally it anchors to
+ * whichever edge lets it GROW inwards — left-anchored grows right,
+ * right-anchored grows left — and `maxWidth` caps it at the far edge, so a long
+ * Khmer label wraps rather than pushing the menu past the viewport.
+ */
+function place(r: DOMRect, align: "left" | "right", minWidth: number): MenuBox {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  const below = vh - r.bottom - GAP - EDGE;
+  const above = r.top - GAP - EDGE;
+  const up = below < MIN_PANEL && above > below;
+
+  const roomRight = vw - r.left - EDGE;
+  const roomLeft = r.right - EDGE;
+  // Honour the requested side when it fits; otherwise take the side that does.
+  const anchorRight = align === "right" ? roomLeft >= minWidth : roomRight < minWidth;
+
+  return {
+    ...(up ? { bottom: vh - r.top + GAP } : { top: r.bottom + GAP }),
+    ...(anchorRight ? { right: vw - r.right } : { left: r.left }),
+    maxHeight: Math.min(MAX_PANEL, Math.max(MIN_PANEL, up ? above : below)),
+    maxWidth: Math.max(minWidth, anchorRight ? roomLeft : roomRight),
+  };
+}
+
 // A controlled filter/select dropdown. Open state is owned by the parent so that
 // only one menu is open at a time across a toolbar. An invisible fixed backdrop
-// closes the menu on any outside click — no document listener, so nothing runs
-// in an effect (the repo's React-compiler lint forbids sync setState in effects).
+// closes the menu on any outside click — no document listener for that, so
+// nothing runs in an effect (the repo's React-compiler lint forbids sync
+// setState in effects).
+//
+// The MENU IS A PORTAL, not an absolutely-positioned child. Every screen puts
+// its filters inside a `Surface`, which is `overflow: hidden`, so an in-flow
+// menu was clipped at the panel's edge — the Category and Author lists lost
+// their bottom half, and the right-most filter lost its right edge to the
+// viewport. Nothing drawn OVER the page can be laid out INSIDE it.
 export function Dropdown({
   label,
   hasValue = false,
@@ -37,11 +95,94 @@ export function Dropdown({
   minWidth?: number;
   align?: "left" | "right";
 }) {
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState<MenuBox | null>(null);
+
+  // Measured on the click that opens it — an event handler, not an effect.
+  const toggle = () => {
+    const r = btnRef.current?.getBoundingClientRect();
+    if (r) setBox(place(r, align, minWidth));
+    onToggle();
+  };
+
+  // A fixed menu cannot follow the page, so anything that moves the trigger out
+  // from under it closes it. Scrolling INSIDE the menu is exempt: that is the
+  // whole point of the capped height.
+  useEffect(() => {
+    if (!open) return;
+    const bail = (e: Event) => {
+      if (e.type === "scroll" && menuRef.current?.contains(e.target as Node)) return;
+      onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("scroll", bail, true);
+    window.addEventListener("resize", bail);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("scroll", bail, true);
+      window.removeEventListener("resize", bail);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open, onClose]);
+
+  const menu =
+    open && box ? (
+      <>
+        {/* Above the modals a Dropdown can appear inside (100 / 120 / 1000) and
+            above Gutenberg's own popovers (1000001); below the media dialog and
+            the editor's toast, which must never be covered. */}
+        <div onClick={onClose} className={css({ position: "fixed", inset: 0, zIndex: 1000010 })} />
+        <div
+          ref={menuRef}
+          role="listbox"
+          aria-label={label}
+          className={css({ position: "fixed", zIndex: 1000011, padding: "6px", borderRadius: "10px", overflowY: "auto", overscrollBehavior: "contain" })}
+          style={{
+            top: box.top,
+            bottom: box.bottom,
+            left: box.left,
+            right: box.right,
+            maxHeight: box.maxHeight,
+            maxWidth: box.maxWidth,
+            // min-width beats max-width in CSS, so it is clamped here instead
+            // of letting a narrow viewport hand back a menu that overflows.
+            minWidth: Math.min(minWidth, box.maxWidth),
+            background: ac.surface,
+            border: `1px solid ${ac.border}`,
+            boxShadow: ac.shadowMd,
+          }}
+        >
+          {options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              role="option"
+              aria-selected={selected === o.value}
+              onClick={() => {
+                onSelect(o.value);
+                onClose();
+              }}
+              className={css({ display: "block", width: "100%", textAlign: "left", padding: "7px 10px", borderRadius: "7px", cursor: "pointer", fontSize: "13px", lineHeight: 1.5, border: "none", background: "transparent", fontFamily: "inherit", _hover: { background: ac.surfaceHover }, _focusVisible: { outline: "2px solid var(--colors-admin-focus)", outlineOffset: "-2px" } })}
+              style={{ color: selected === o.value ? ac.text : ac.sub }}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </>
+    ) : null;
+
   return (
     <div className={css({ position: "relative" })}>
       <button
+        ref={btnRef}
         type="button"
-        onClick={onToggle}
+        onClick={toggle}
+        aria-haspopup="listbox"
+        aria-expanded={open}
         className={css({
           height: "36px",
           padding: "0 12px",
@@ -61,36 +202,7 @@ export function Dropdown({
         <Icon name="chevronDown" size={12} style={{ color: ac.muted }} />
       </button>
 
-      {open ? (
-        <>
-          <div onClick={onClose} className={css({ position: "fixed", inset: 0, zIndex: 10 })} />
-          <div
-            className={css({ position: "absolute", top: "42px", zIndex: 20, padding: "6px", borderRadius: "10px" })}
-            style={{
-              minWidth,
-              left: align === "left" ? 0 : "auto",
-              right: align === "right" ? 0 : "auto",
-              background: ac.surface,
-              border: `1px solid ${ac.border}`,
-              boxShadow: ac.shadowMd,
-            }}
-          >
-            {options.map((o) => (
-              <div
-                key={o.value}
-                onClick={() => {
-                  onSelect(o.value);
-                  onClose();
-                }}
-                className={css({ padding: "7px 10px", borderRadius: "7px", cursor: "pointer", fontSize: "13px", whiteSpace: "nowrap", _hover: { background: ac.surfaceHover } })}
-                style={{ color: selected === o.value ? ac.text : ac.sub }}
-              >
-                {o.label}
-              </div>
-            ))}
-          </div>
-        </>
-      ) : null}
+      {menu && typeof document !== "undefined" ? createPortal(menu, document.body) : null}
     </div>
   );
 }
@@ -143,7 +255,7 @@ export function SearchInput({
 // The single red primary button — new article, upload, add user, etc. Pass
 // `href` to render it as a navigation link (e.g. into a create flow).
 export function PrimaryButton({ label, icon = "plus" as const, href }: { label: string; icon?: "plus" | "upload"; href?: string }) {
-  const cls = css({ height: "36px", padding: "0 16px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "7px", border: "none", color: "#fff", transition: "background .12s, box-shadow .12s", boxShadow: ac.shadowSm, _hover: { background: ac.accentHover } });
+  const cls = css({ height: "36px", padding: "0 16px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "7px", border: "none", color: "var(--colors-admin-accent-fg)", transition: "background .12s, box-shadow .12s", boxShadow: ac.shadowSm, _hover: { background: ac.accentHover } });
   const inner = (
     <>
       <Icon name={icon} size={13} strokeWidth={2} />

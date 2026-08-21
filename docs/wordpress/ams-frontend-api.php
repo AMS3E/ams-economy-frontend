@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AMS Frontend API
  * Description: General-purpose endpoints for the AMS Infotainment Next.js frontend (add new ones here as needed). Read-only + a standalone hero-slider embed + the homepage featured-program picker + anonymous REST commenting + per-user login tokens for authenticated writes + program custom-meta exposed to REST + skips AMS Cache's synchronous page warmer on dashboard writes (96s -> under 1s). Self-contained — deactivate/delete anytime with zero effect on anything else.
- * Version:     1.9.1
+ * Version:     1.9.2
  * Author:      Soth Kimleng
  *
  * Standalone "add endpoints as needed" API file, separate from the legacy
@@ -33,8 +33,11 @@
  *        { id, name, username, roles, capabilities }. Send the token back on every
  *        write in an  X-AMS-Token:  header (see the auth note below) and the REST
  *        call runs AS that user, with WordPress enforcing capabilities natively.
- *        401 on bad credentials, 403 if the account has no dashboard access,
- *        429 once an IP trips the brute-force throttle. Requires HTTPS.
+ *        Errors stay HTTP 200 and carry `status: error` plus their semantic
+ *        `http_status` in JSON because this host replaces 4xx REST bodies with
+ *        an HTML 404 page. `http_status` is 401 on bad credentials, 403 if the
+ *        account has no dashboard access, and 429 once an IP trips the brute-
+ *        force throttle. Requires HTTPS.
  *
  *  GET /wp-json/wp/v2/web/me                               who the token is
  *        The same { id, name, username, roles, capabilities } for whoever the
@@ -1504,28 +1507,47 @@ add_action( 'rest_api_init', function () {
     ) );
 } );
 
+/**
+ * A login failure whose meaning survives this host's error-page interception.
+ *
+ * GCX replaces WordPress 4xx responses (status and body) with a generic HTML
+ * 404. Keep the transport status at 200 and carry the semantic status in JSON
+ * so the login form can distinguish credentials, access and throttling errors.
+ */
+function ams_afa_login_error( $code, $message, $http_status, $retry_after = 0 ) {
+    $resp = new WP_REST_Response( array(
+        'status'      => 'error',
+        'code'        => (string) $code,
+        'message'     => (string) $message,
+        'http_status' => (int) $http_status,
+    ), 200 );
+    if ( $retry_after > 0 ) {
+        $resp->header( 'Retry-After', (string) $retry_after );
+    }
+    return $resp;
+}
+
 function ams_afa_login( $request ) {
     if ( AMS_AFA_LOGIN_REQUIRE_SSL && ! ams_afa_login_is_secure() ) {
-        return new WP_Error( 'ams_afa_insecure', 'Login requires HTTPS.', array( 'status' => 400 ) );
+        return ams_afa_login_error( 'insecure', 'Login requires HTTPS.', 400 );
     }
 
     // Throttle first — a locked-out IP never reaches wp_authenticate().
     $throttle_key = ams_afa_login_throttle_key();
     $fails        = (int) get_transient( $throttle_key );
     if ( $fails >= AMS_AFA_LOGIN_MAX_FAILS ) {
-        $resp = new WP_REST_Response( array(
-            'status'  => 'error',
-            'code'    => 'too_many_attempts',
-            'message' => 'Too many failed attempts. Try again later.',
-        ), 429 );
-        $resp->header( 'Retry-After', (string) AMS_AFA_LOGIN_LOCKOUT );
-        return $resp;
+        return ams_afa_login_error(
+            'too_many_attempts',
+            'Too many failed attempts. Try again later.',
+            429,
+            AMS_AFA_LOGIN_LOCKOUT
+        );
     }
 
     $username = trim( (string) $request->get_param( 'username' ) );
     $password = (string) $request->get_param( 'password' );
     if ( '' === $username || '' === $password ) {
-        return new WP_Error( 'ams_afa_bad_request', 'Username and password are required.', array( 'status' => 400 ) );
+        return ams_afa_login_error( 'bad_request', 'Username and password are required.', 400 );
     }
 
     $user = wp_authenticate( $username, $password );
@@ -1534,13 +1556,13 @@ function ams_afa_login( $request ) {
         // Count the failure; answer with ONE generic message so the response
         // never reveals whether the username exists.
         set_transient( $throttle_key, $fails + 1, AMS_AFA_LOGIN_LOCKOUT );
-        return new WP_Error( 'ams_afa_invalid_login', 'Invalid username or password.', array( 'status' => 401 ) );
+        return ams_afa_login_error( 'invalid_login', 'Invalid username or password.', 401 );
     }
 
     if ( ! ams_afa_login_has_access( $user ) ) {
         // Valid credentials, but nothing to do here. Don't count it as a brute-
         // force failure, but don't hand out a token either.
-        return new WP_Error( 'ams_afa_no_access', 'This account has no dashboard access.', array( 'status' => 403 ) );
+        return ams_afa_login_error( 'no_access', 'This account has no dashboard access.', 403 );
     }
 
     delete_transient( $throttle_key ); // clean slate on success

@@ -22,8 +22,12 @@ import { container } from "./shared";
 // The nav stretches to the bar's full height so a section's hover target is the
 // whole 64px, not just its text — which is also what puts the panel's top edge at
 // the bar's bottom edge (`top: 100%`) instead of floating in the middle of it.
+// Switches at `xl` (1280px), not `lg` (1024px): six section links plus a
+// chevron each, plus the four colored pills further right, don't fit an
+// unbreakable row below that — see MobileNav's hamburger, which switches at
+// the same breakpoint so the two can never show at once.
 const navRoot = css({
-  display: { base: "none", lg: "flex" },
+  display: { base: "none", xl: "flex" },
   alignSelf: "stretch",
   alignItems: "stretch",
   gap: "26px",
@@ -176,10 +180,10 @@ export default async function SiteHeader() {
             ))}
           </nav>
           <div className={css({ flex: "1" })} />
-          {/* skewed colored ribbon */}
+          {/* skewed colored ribbon — same `xl` switch as navRoot above */}
           <div
             className={css({
-              display: { base: "none", lg: "flex" },
+              display: { base: "none", xl: "flex" },
               alignItems: "stretch",
               height: "64px",
             })}
@@ -239,6 +243,7 @@ export default async function SiteHeader() {
           faint black wash over the page background, not a solid dark fill. */}
       <div
         className={css({
+          display: { base: "none", xl: "block" },
           background: "rgba(0, 0, 0, 0.07)",
           width: "100%",
           paddingTop: "4px",
@@ -259,20 +264,29 @@ export default async function SiteHeader() {
               // space top/bottom the real row never has.
               display: "flex",
               alignItems: "center",
-              justifyContent: "flex-end",
-              gap: "18px",
               // `#page #site-header .vodi-navigation-v3 .container-fluid
               // .site_header__secondary-nav-v3{padding-right:21% !important}`
-              // — pulls the whole row in from the right edge on wide screens.
-              paddingRight: "21%",
+              // — pulls the whole row in from the right edge, but that's a
+              // DESKTOP rule: applied unconditionally it reserves ~21% of the
+              // row for nothing and right-packs the icons against it, which
+              // below `xl` (where there's much less width to spare) leaves a
+              // dead gap on the left instead of the strip starting flush and
+              // scrolling. Below `xl` it reads left-to-right like any other
+              // swipeable row.
+              justifyContent: { base: "flex-start", xl: "flex-end" },
+              gap: "18px",
+              paddingRight: { base: 0, xl: "21%" },
               overflowX: "auto",
               scrollbarWidth: "none",
               "&::-webkit-scrollbar": { display: "none" },
             }),
           )}
         >
+          {/* Dropped below `sm` — at phone width it eats space the icon strip
+              needs more, and the icons are self-explanatory without it. */}
           <span
             className={css({
+              display: { base: "none", sm: "inline" },
               color: "#8e8e8e",
               fontSize: "17px",
               whiteSpace: "nowrap",

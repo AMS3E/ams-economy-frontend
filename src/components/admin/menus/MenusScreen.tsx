@@ -4,7 +4,6 @@
 // /api/admin/menus BFF, keyed by the selected menu slug so switching menus
 // keeps each one's items cached.
 
-import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import MenuManager from "./MenuManager";
 // Type-only from the server module (erased at build); the constant comes from
@@ -13,13 +12,11 @@ import type { MenuItem, MenuSummary } from "@/lib/admin/menus";
 import { PROGRAM_ICON_MENU } from "@/lib/admin/constants";
 import { useScreenRefresh, adminKeys } from "@/lib/admin/queries";
 
-// STABLE empty references. `?? []` would mint a new array on every render, and
+// STABLE empty reference. `?? []` would mint a new array on every render, and
 // MenuManager re-seeds its local order whenever the items prop changes
 // IDENTITY — with a fresh array each time that check never settles, so it
-// re-rendered in a loop and hydration reported a text mismatch. Same reason
-// the menus list needs one.
+// re-rendered in a loop and hydration reported a text mismatch.
 const NO_ITEMS: MenuItem[] = [];
-const NO_MENUS: MenuSummary[] = [];
 
 interface MenusPayload {
   menus: MenuSummary[];
@@ -29,7 +26,9 @@ interface MenusPayload {
 }
 
 export default function MenusScreen() {
-  const [slug, setSlug] = useState(PROGRAM_ICON_MENU);
+  // The screen is pinned to the program-icon menu — the only one this page
+  // manages. The menu picker was removed by owner decision (2026-08-17).
+  const slug = PROGRAM_ICON_MENU;
   const queryClient = useQueryClient();
   const { refreshing, refresh } = useScreenRefresh("menus", [adminKeys.menus(slug)]);
 
@@ -60,7 +59,6 @@ export default function MenusScreen() {
       // that returns identical items — which is exactly when the local copy
       // should be dropped, because a write just landed.
       key={query.data?.fetchedAt ?? "loading"}
-      menus={query.data?.menus ?? NO_MENUS}
       menu={query.data?.menu ?? null}
       items={query.data?.items ?? NO_ITEMS}
       loading={query.isPending}
@@ -68,7 +66,6 @@ export default function MenusScreen() {
       fetchedAt={query.data?.fetchedAt}
       refreshing={refreshing}
       onRefresh={refresh}
-      onSelectMenu={setSlug}
       onMutated={() => queryClient.invalidateQueries({ queryKey: adminKeys.menus(slug) })}
     />
   );

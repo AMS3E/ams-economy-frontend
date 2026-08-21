@@ -9,12 +9,12 @@
 // edit_theme_options itself, and a 403 is reported as the capability wall it
 // is rather than a generic failure.
 //
-// The public site no longer reads this menu at all — getProgramIcons()
-// (src/lib/navigation.ts) builds the header icon strip from the program
-// registry now, not from a WordPress menu — so there is nothing here left to
-// cache-bust on write.
+// The public site's copy of this menu is ISR-cached under the "menu" tag, so
+// every successful write busts it — otherwise an editor's reorder would not
+// show up until the revalidate window expired.
 
 import { redirect } from "next/navigation";
+import { revalidateTag } from "next/cache";
 import { adminFetch, AdminAuthError, AdminApiError } from "./client";
 // A VALUE import, not a type re-export: `export type { … }` from a "use server"
 // file crashes every action in it at dev runtime with an opaque digest 500.
@@ -42,11 +42,17 @@ function fail(e: unknown, msg: string): ActionResult {
   return { ok: false, error: msg };
 }
 
+/** Every successful menu write invalidates the public site's cached copy. */
+function bustPublicMenu() {
+  revalidateTag("menu", "max");
+}
+
 export async function renameMenuItem(id: number, label: string): Promise<ActionResult> {
   const title = label.trim();
   if (!title) return { ok: false, error: "Enter a label." };
   try {
     await adminFetch(`/wp/v2/menu-items/${id}`, { method: "POST", body: { title } });
+    bustPublicMenu();
     return { ok: true };
   } catch (e) {
     return fail(e, "Couldn't rename this item.");
@@ -58,6 +64,7 @@ export async function setMenuItemUrl(id: number, url: string): Promise<ActionRes
   if (!u) return { ok: false, error: "Enter a link." };
   try {
     await adminFetch(`/wp/v2/menu-items/${id}`, { method: "POST", body: { url: u } });
+    bustPublicMenu();
     return { ok: true };
   } catch (e) {
     return fail(e, "Couldn't update this link.");
@@ -83,6 +90,7 @@ export async function reorderMenuItems(updates: { id: number; order: number }[])
     for (const u of updates) {
       await adminFetch(`/wp/v2/menu-items/${u.id}`, { method: "POST", body: { menu_order: u.order } });
     }
+    bustPublicMenu();
     return { ok: true };
   } catch (e) {
     return fail(e, "Couldn't save the new order. Some items may have moved — refresh to see where things stand.");
@@ -117,6 +125,7 @@ export async function addMenuItem(menuId: number, label: string, url: string, po
         menu_order: position && position > 0 ? position : 1,
       },
     });
+    bustPublicMenu();
     return { ok: true, id: data.id };
   } catch (e) {
     return fail(e, "Couldn't add the item.");
@@ -160,6 +169,7 @@ export async function setMenuItemIcon(
         },
       },
     });
+    bustPublicMenu();
     return { ok: true };
   } catch (e) {
     return fail(e, iconId ? "Couldn't set the icon." : "Couldn't clear the icon.");
@@ -171,6 +181,7 @@ export async function setMenuItemIcon(
 export async function deleteMenuItem(id: number): Promise<ActionResult> {
   try {
     await adminFetch(`/wp/v2/menu-items/${id}`, { method: "DELETE", query: { force: true } });
+    bustPublicMenu();
     return { ok: true };
   } catch (e) {
     return fail(e, "Couldn't remove the item.");

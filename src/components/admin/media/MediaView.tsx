@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { css } from "@/styled-system/css";
 import { ac } from "../tokens";
 import { Icon } from "../icons";
@@ -20,7 +20,6 @@ import {
 } from "../ui";
 import { Bar, SkeletonKeyframes } from "../Skeleton";
 import RefreshButton from "../RefreshButton";
-import ConfirmDialog from "../ConfirmDialog";
 import type { MediaItem, MediaListResult } from "@/lib/admin/media";
 import { saveMediaAlt, deleteMedia } from "@/lib/admin/screen-actions";
 import { uploadImageFile } from "../upload-client";
@@ -63,9 +62,13 @@ export default function MediaView({
   const router = useRouter();
   const pathname = usePathname();
   const [typeOpen, setTypeOpen] = useState(false);
-  // null = "no explicit choice" (defaults to the first item once data lands,
-  // preserving the old always-open drawer); "none" = explicitly closed.
-  const [selectedId, setSelectedId] = useState<number | "none" | null>(null);
+  // null = nothing open. It used to mean "no explicit choice", falling back to
+  // the FIRST item once data landed — a holdover from an always-open side
+  // drawer, which also needed a "none" sentinel to express "explicitly closed".
+  // The preview is a modal now, so that default would throw a full-screen
+  // overlay over the library on every single page load. Closed is the default,
+  // and the sentinel is gone with it.
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadErr, setUploadErr] = useState<string | null>(null);
 
@@ -103,15 +106,13 @@ export default function MediaView({
   const { items, total, totalPages } = result;
   const start = total === 0 ? 0 : (query.page - 1) * perPage + 1;
   const end = start === 0 ? 0 : start + items.length - 1;
-  const effectiveId = selectedId === "none" ? null : (selectedId ?? items[0]?.id ?? null);
-  const sel = items.find((m) => m.id === effectiveId) ?? null;
+  const sel = items.find((m) => m.id === selectedId) ?? null;
   const typeLabel = TYPE_OPTS.find((t) => t.value === query.type)?.label ?? "Type";
 
   return (
-    <div className={css({ display: "flex", flex: 1, alignItems: "stretch", minWidth: 0 })}>
-      <div className={css({ flex: 1, minWidth: 0, padding: "28px 32px 48px" })}>
+    <div>
+      <div className={css({ minWidth: 0 })}>
         <PageHeader
-          trail={[{ label: "Content" }, { label: "Media" }]}
           title="Media"
           sub={loading ? "Loading…" : `${total.toLocaleString("en-US")} files in the library`}
           actions={
@@ -125,7 +126,7 @@ export default function MediaView({
                 {uploading ? "Uploading…" : "Upload"}
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/*,video/*,audio/*"
                   disabled={uploading}
                   className={css({ display: "none" })}
                   onChange={(e) => {
@@ -139,8 +140,9 @@ export default function MediaView({
           }
         />
 
-        {/* Filters: one row, above the content they scope. */}
-        <div className={css({ display: "flex", alignItems: "center", gap: "10px", marginTop: "20px", flexWrap: "wrap" })}>
+        <Surface>
+        {/* Filters: the panel's first cell, above the content they scope. */}
+        <div className={css({ display: "flex", alignItems: "center", gap: "10px", padding: "12px 22px", flexWrap: "wrap" })} style={{ borderBottom: `1px solid ${ac.border}` }}>
           <form onSubmit={onSearch} className={css({ display: "flex" })}>
             <SearchInput placeholder="Search media…" name="q" defaultValue={query.search} width="300px" />
           </form>
@@ -161,15 +163,15 @@ export default function MediaView({
           ) : null}
         </div>
 
-        {/* One bordered surface holding the grid and its footer — the same
-            container the list screens wrap their table in, so a grid of files
-            and a table of rows read as the same kind of object. */}
-        <Surface style={{ marginTop: "16px", overflow: "hidden" }}>
+        {/* The grid and its footer share the panel the filters opened, so a
+            grid of files and a table of rows read as the same kind of object. */}
           {loading && !error ? (
             <div className={gridClass} aria-busy>
               {Array.from({ length: 18 }, (_, i) => (
                 <div key={i}>
-                  <Bar w="100%" h={126} r={10} />
+                  {/* Square, like the real tiles — a rounded skeleton would
+                      change shape under you as the images land. */}
+                  <Bar w="100%" h={126} r={0} />
                   <div style={{ marginTop: 7 }}>
                     <Bar w="80%" h={10} />
                   </div>
@@ -188,7 +190,7 @@ export default function MediaView({
           ) : (
             <div className={gridClass} style={{ opacity: fetching ? 0.55 : 1, transition: "opacity .15s" }}>
               {items.map((m) => {
-                const on = effectiveId === m.id;
+                const on = selectedId === m.id;
                 return (
                   <button
                     key={m.id}
@@ -202,7 +204,6 @@ export default function MediaView({
                         position: "relative",
                         display: "flex",
                         aspectRatio: "1/1",
-                        borderRadius: "10px",
                         alignItems: "center",
                         justifyContent: "center",
                         overflow: "hidden",
@@ -220,13 +221,30 @@ export default function MediaView({
                       {m.type === "image" && m.thumb ? (
                         // eslint-disable-next-line @next/next/no-img-element -- admin thumbnail; next/image needs remotePatterns for the S3 host
                         <img src={m.thumb} alt={m.alt} className={css({ width: "100%", height: "100%" })} style={{ objectFit: "cover" }} />
+                      ) : m.type === "video" && m.url ? (
+                        <>
+                          {/* No image rendition exists for videos, so the tile IS
+                              the video: preload="metadata" fetches just enough
+                              for the browser to paint the first frame, and the
+                              #t=0.1 fragment makes Safari actually paint it. */}
+                          <video src={`${m.url}#t=0.1`} preload="metadata" muted playsInline className={css({ width: "100%", height: "100%", pointerEvents: "none" })} style={{ objectFit: "cover" }} />
+                          <span aria-hidden className={css({ position: "absolute", left: "6px", bottom: "6px", width: "22px", height: "22px", borderRadius: "11px", display: "flex", alignItems: "center", justifyContent: "center" })} style={{ background: "rgba(0,0,0,0.55)", color: "#fff" }}>
+                            <Icon name="play" size={12} strokeWidth={2} />
+                          </span>
+                        </>
                       ) : (
-                        <Icon name={m.type === "video" ? "play" : "media"} size={20} strokeWidth={1.4} style={{ color: ac.faint }} />
+                        <Icon name={m.type === "audio" ? "music" : "media"} size={20} strokeWidth={1.4} style={{ color: ac.faint }} />
                       )}
                     </span>
                     <span
                       className={css({ display: "block", fontSize: "10.5px", marginTop: "7px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" })}
-                      style={{ fontFamily: "ui-monospace, monospace", color: on ? ac.text : ac.sub }}
+                      // NOT monospace. A filename here is usually Khmer, and
+                      // `ui-monospace, monospace` replaces the whole admin
+                      // stack — Battambang included — so Khmer had no font to
+                      // fall to and the browser shaped it with whatever it
+                      // happened to pick. Inheriting keeps Latin in Plus Jakarta
+                      // and Khmer in Battambang, per glyph.
+                      style={{ color: on ? ac.text : ac.sub }}
                     >
                       {m.title}
                     </span>
@@ -264,15 +282,15 @@ export default function MediaView({
         </Surface>
       </div>
 
-      {/* Detail drawer — keyed by item so alt-draft state resets per selection */}
+      {/* Full-screen preview — keyed by item so alt-draft state resets per selection */}
       {sel ? (
-        <DetailsDrawer
+        <MediaDialog
           key={sel.id}
           item={sel}
-          onClose={() => setSelectedId("none")}
+          onClose={() => setSelectedId(null)}
           onSaved={onMutated}
           onDeleted={() => {
-            setSelectedId("none");
+            setSelectedId(null);
             onMutated();
           }}
         />
@@ -300,7 +318,6 @@ const tileClass = css({
   background: "transparent",
   font: "inherit",
   cursor: "pointer",
-  borderRadius: "10px",
   // Lift + shadow only. The tile's border is applied INLINE (it carries the
   // selected state), and an inline declaration beats any stylesheet rule — a
   // hover borderColor here would simply never land.
@@ -308,7 +325,12 @@ const tileClass = css({
   _focusVisible: { outline: "2px solid var(--colors-admin-focus)", outlineOffset: "2px" },
 });
 
-function DetailsDrawer({
+/** Full-screen preview. Replaced a 360px side drawer that lived IN the page
+ *  layout and squeezed the grid whenever it opened.
+ *
+ *  It carries everything the drawer did, because the drawer was the only route
+ *  to any of it: the file's URL, its alt text, and the delete. */
+function MediaDialog({
   item,
   onClose,
   onSaved,
@@ -326,8 +348,56 @@ function DetailsDrawer({
   const [deleting, setDeleting] = useState(false);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const restoreRef = useRef<HTMLElement | null>(null);
 
   const altDirty = alt.trim() !== item.alt.trim();
+
+  // Modal duties the drawer never had: it was part of the page, so the page
+  // behind it stayed legitimately usable. This is not.
+  useEffect(() => {
+    restoreRef.current = document.activeElement as HTMLElement | null;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    panelRef.current?.focus();
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      // Back to the tile you opened, not to the top of the document.
+      restoreRef.current?.focus?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        // Escape backs out of the delete confirmation first — one keypress
+        // should not skip a confirmation AND close the file.
+        if (confirming) setConfirming(false);
+        else onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const root = panelRef.current;
+      if (!root) return;
+      const focusables = Array.from(
+        root.querySelectorAll<HTMLElement>(
+          "a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]",
+        ),
+      ).filter(el => el.tabIndex !== -1 && el.offsetParent !== null);
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [confirming, onClose]);
 
   const saveAlt = async () => {
     if (savingAlt) return;
@@ -340,8 +410,9 @@ function DetailsDrawer({
   };
 
   // PERMANENT — attachments have no trash over REST (see deleteMedia), which is
-  // why this one confirms in a dialog that stays up and reports failure in
-  // place: there is nothing to restore from if it goes wrong.
+  // why the confirmation takes over the footer IN PLACE rather than stacking a
+  // second overlay: it has to survive a failed request and report it where you
+  // are already looking, and there is nothing to restore from if it goes wrong.
   const remove = async () => {
     if (deleting) return;
     setDeleting(true);
@@ -358,120 +429,210 @@ function DetailsDrawer({
 
   return (
     <div
-      className={css({ width: "360px", flex: "none", padding: "20px 24px 32px", display: "flex", flexDirection: "column", gap: "18px", overflowY: "auto" })}
-      style={{ background: ac.surface, borderLeft: `1px solid ${ac.border}` }}
+      // Padded, not flush: the panel used to fill the viewport edge to edge,
+      // which hid the dimmed backdrop entirely and made the preview read as a
+      // page you had navigated to rather than a layer over the one you were on.
+      // The gutter is the only thing telling you there is something behind it,
+      // so it is also the click target that closes.
+      className={css({
+        position: "fixed",
+        inset: 0,
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: { base: "16px", md: "32px", lg: "48px" },
+      })}
+      style={{ background: ac.overlay }}
+      // Backdrop dismiss on mousedown that both starts AND ends on the backdrop:
+      // dragging to select the URL text and releasing outside must not close it.
+      onMouseDown={e => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
-      <div className={css({ display: "flex", alignItems: "center", justifyContent: "space-between" })}>
-        <div className={css({ fontSize: "14px", fontWeight: 600 })}>Media details</div>
-        <IconButton name="x" label="Close details" size="sm" onClick={onClose} />
-      </div>
-
       <div
-        className={css({ aspectRatio: "3/4", borderRadius: "10px", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", boxShadow: "var(--shadows-admin-sm)" })}
-        style={{ background: ac.skeleton, border: `1px solid ${ac.border}` }}
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Media details: ${item.title}`}
+        tabIndex={-1}
+        className={css({
+          width: "100%",
+          height: "100%",
+          display: "grid",
+          gridTemplateColumns: { base: "1fr", lg: "minmax(0,1fr) 380px" },
+          gridTemplateRows: { base: "minmax(0,1fr) auto", lg: "1fr" },
+          minWidth: 0,
+          overflow: "hidden",
+          _focusVisible: { outline: "none" },
+        })}
+        // The shadow is what makes an inset panel read as floating rather than
+        // as a differently-coloured rectangle — the same lift MediaPicker and
+        // ConfirmDialog use, so the tool's overlays behave alike.
+        style={{ background: ac.surface, boxShadow: ac.shadowMd }}
       >
-        {item.type === "image" && item.thumb ? (
-          // eslint-disable-next-line @next/next/no-img-element -- admin preview; next/image needs remotePatterns for the S3 host
-          <img src={item.thumb} alt={item.alt} className={css({ width: "100%", height: "100%" })} style={{ objectFit: "contain" }} />
-        ) : (
-          <Icon name={item.type === "video" ? "play" : "media"} size={28} strokeWidth={1.3} style={{ color: ac.faint }} />
-        )}
-      </div>
-
-      <div>
-        <div className={css({ fontSize: "12.5px", lineHeight: 1.6, wordBreak: "break-all" })} style={{ fontFamily: "ui-monospace, monospace" }}>{item.title}</div>
-        <div className={css({ fontSize: "12.5px", marginTop: "6px" })} style={{ color: ac.muted }}>{[item.dims, item.size, item.mime].filter(Boolean).join(" · ")}</div>
-      </div>
-
-      <div className={css({ display: "flex", flexDirection: "column", gap: "9px", paddingTop: "16px" })} style={{ borderTop: `1px solid ${ac.rowLine}` }}>
-        <DetailRow label="Uploaded by" value={item.authorName || "—"} />
-        <DetailRow label="Uploaded" value={item.date} />
-      </div>
-
-      {item.type === "image" ? (
-        <div>
-          <Field label="Alt text" hint="Describes the image for screen readers and for search.">
-            <Textarea
-              value={alt}
-              onChange={(e) => {
-                setAlt(e.target.value);
-                setAltMsg(null);
-              }}
-              rows={2}
-              placeholder="Describe the image…"
+        {/* Left: the file itself, on the sunken ground so a transparent PNG
+            reads as an image rather than as a hole in the dialog. */}
+        <div
+          className={css({ display: "flex", alignItems: "center", justifyContent: "center", minWidth: 0, minHeight: 0, padding: "32px" })}
+          style={{ background: ac.surfaceSunken }}
+        >
+          {item.type === "image" && (item.url || item.thumb) ? (
+            // The full file, not the thumbnail the drawer used — at this size a
+            // thumb is visibly soft, and seeing the real image is the point.
+            // eslint-disable-next-line @next/next/no-img-element -- admin preview; next/image needs remotePatterns for the S3 host
+            <img
+              src={item.url || item.thumb}
+              alt={item.alt}
+              className={css({ maxWidth: "100%", maxHeight: "100%", display: "block" })}
+              style={{ objectFit: "contain" }}
             />
-          </Field>
-          {altDirty || altMsg ? (
-            <div className={css({ display: "flex", alignItems: "center", gap: "10px", marginTop: "9px" })}>
-              {altDirty ? (
-                <Button variant="primary" size="sm" disabled={savingAlt} onClick={() => void saveAlt()}>
-                  {savingAlt ? "Saving…" : "Save alt text"}
-                </Button>
-              ) : null}
-              {altMsg ? (
-                <span className={css({ fontSize: "12px" })} style={{ color: altMsg.kind === "err" ? ac.danger : ac.good }}>
-                  {altMsg.text}
-                </span>
-              ) : null}
+          ) : item.type === "video" && item.url ? (
+            // A real player, same footprint rules as the image: the whole point
+            // of opening a video is watching it.
+            <video src={item.url} controls preload="metadata" className={css({ maxWidth: "100%", maxHeight: "100%", display: "block" })} />
+          ) : item.type === "audio" && item.url ? (
+            <div className={css({ display: "flex", flexDirection: "column", alignItems: "center", gap: "20px", width: "100%" })}>
+              <Icon name="music" size={48} strokeWidth={1.2} style={{ color: ac.faint }} />
+              <audio src={item.url} controls preload="metadata" className={css({ width: "100%", maxWidth: "420px" })} />
             </div>
-          ) : null}
+          ) : (
+            <Icon name="media" size={48} strokeWidth={1.2} style={{ color: ac.faint }} />
+          )}
         </div>
-      ) : null}
 
-      {/* Not a <Field>: that renders a <label>, and a label wrapping the Copy
-          button would forward the click to the input as well. */}
-      <div>
-        <div className={css({ fontSize: "12.5px", fontWeight: 500, marginBottom: "6px" })} style={{ color: ac.sub }}>
-          File URL
-        </div>
-        <div className={css({ display: "flex", gap: "6px" })}>
-          <Input readOnly value={item.url} className={css({ flex: 1, minWidth: 0, fontSize: "11px", fontFamily: "ui-monospace, monospace" })} />
-          <Button
-            icon="copy"
-            className={css({ flex: "none" })}
-            onClick={() => {
-              navigator.clipboard?.writeText(item.url);
-              setCopied(true);
-            }}
+        {/* Right: everything you can DO with it. Scrolls on its own, so a long
+            filename never pushes Delete off the bottom. */}
+        <div
+          className={css({ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, overflowY: "auto" })}
+          style={{ borderLeft: `1px solid ${ac.border}` }}
+        >
+          <div
+            className={css({ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", padding: "14px 20px", flex: "none" })}
+            style={{ borderBottom: `1px solid ${ac.border}` }}
           >
-            {copied ? "Copied" : "Copy"}
-          </Button>
+            <div className={css({ fontSize: "14px", fontWeight: 600 })}>Media details</div>
+            <IconButton name="x" label="Close preview" size="sm" onClick={onClose} />
+          </div>
+
+          <div className={css({ display: "flex", flexDirection: "column", gap: "18px", padding: "18px 20px", flex: 1 })}>
+            <div>
+              {/* Inherits the admin stack for the same reason as the grid tile.
+                  `overflowWrap: anywhere` rather than `wordBreak: break-all`:
+                  Khmer is written without spaces, so it still needs to break
+                  mid-string, but break-all will split inside a glyph cluster and
+                  detach a vowel sign from its consonant. */}
+              <div className={css({ fontSize: "13px", lineHeight: 1.6, overflowWrap: "anywhere" })}>
+                {item.title}
+              </div>
+              <div className={css({ fontSize: "12.5px", marginTop: "6px" })} style={{ color: ac.muted }}>
+                {[item.dims, item.size, item.mime].filter(Boolean).join(" · ")}
+              </div>
+            </div>
+
+            <div className={css({ display: "flex", flexDirection: "column", gap: "9px", paddingTop: "16px" })} style={{ borderTop: `1px solid ${ac.rowLine}` }}>
+              <DetailRow label="Uploaded by" value={item.authorName || "—"} />
+              <DetailRow label="Uploaded" value={item.date} />
+            </div>
+
+            {item.type === "image" ? (
+              <div>
+                <Field label="Alt text" hint="Describes the image for screen readers and for search.">
+                  <Textarea
+                    value={alt}
+                    onChange={e => {
+                      setAlt(e.target.value);
+                      setAltMsg(null);
+                    }}
+                    rows={2}
+                    placeholder="Describe the image…"
+                  />
+                </Field>
+                {altDirty || altMsg ? (
+                  <div className={css({ display: "flex", alignItems: "center", gap: "10px", marginTop: "9px" })}>
+                    {altDirty ? (
+                      <Button variant="primary" size="sm" disabled={savingAlt} onClick={() => void saveAlt()}>
+                        {savingAlt ? "Saving…" : "Save alt text"}
+                      </Button>
+                    ) : null}
+                    {altMsg ? (
+                      <span className={css({ fontSize: "12px" })} style={{ color: altMsg.kind === "err" ? ac.danger : ac.good }}>
+                        {altMsg.text}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* Not a <Field>: that renders a <label>, and a label wrapping the
+                Copy button would forward the click to the input as well. */}
+            <div>
+              <div className={css({ fontSize: "12.5px", fontWeight: 500, marginBottom: "6px" })} style={{ color: ac.sub }}>
+                File URL
+              </div>
+              <div className={css({ display: "flex", gap: "6px" })}>
+                <Input readOnly value={item.url} className={css({ flex: 1, minWidth: 0, fontSize: "11px", fontFamily: "ui-monospace, monospace" })} />
+                <Button
+                  icon="copy"
+                  className={css({ flex: "none" })}
+                  onClick={() => {
+                    navigator.clipboard?.writeText(item.url);
+                    setCopied(true);
+                  }}
+                >
+                  {copied ? "Copied" : "Copy"}
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* Footer, which the delete confirmation takes over in place. */}
+          <div className={css({ padding: "14px 20px", flex: "none" })} style={{ borderTop: `1px solid ${ac.border}` }}>
+            {confirming ? (
+              <div className={css({ display: "flex", flexDirection: "column", gap: "10px" })}>
+                <div className={css({ fontSize: "12.5px", lineHeight: 1.6 })} style={{ color: ac.sub }}>
+                  <strong style={{ color: ac.text, fontWeight: 600 }}>{item.title}</strong> is removed from WordPress
+                  for good. Unlike posts and programs there is no Trash to restore it from, and any article or program
+                  still using this file loses its image.
+                </div>
+                {deleteErr ? (
+                  <div role="alert" className={css({ fontSize: "12.5px" })} style={{ color: ac.danger }}>
+                    {deleteErr}
+                  </div>
+                ) : null}
+                <div className={css({ display: "flex", gap: "8px" })}>
+                  <Button variant="danger" disabled={deleting} className={css({ flex: 1 })} onClick={() => void remove()}>
+                    {deleting ? "Deleting…" : "Delete permanently"}
+                  </Button>
+                  <Button
+                    disabled={deleting}
+                    onClick={() => {
+                      setConfirming(false);
+                      setDeleteErr(null);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button
+                variant="danger"
+                icon="trash"
+                disabled={deleting}
+                className={css({ width: "100%" })}
+                onClick={() => {
+                  setDeleteErr(null);
+                  setConfirming(true);
+                }}
+              >
+                Delete permanently
+              </Button>
+            )}
+          </div>
         </div>
       </div>
-
-      <div className={css({ marginTop: "auto", paddingTop: "16px" })} style={{ borderTop: `1px solid ${ac.rowLine}` }}>
-        <Button
-          variant="danger"
-          icon="trash"
-          disabled={deleting}
-          className={css({ width: "100%" })}
-          onClick={() => {
-            setDeleteErr(null);
-            setConfirming(true);
-          }}
-        >
-          {deleting ? "Deleting…" : "Delete permanently"}
-        </Button>
-      </div>
-
-      {confirming ? (
-        <ConfirmDialog
-          title="Delete this file permanently?"
-          confirmLabel="Delete permanently"
-          busyLabel="Deleting…"
-          busy={deleting}
-          error={deleteErr}
-          onConfirm={() => void remove()}
-          onCancel={() => {
-            setConfirming(false);
-            setDeleteErr(null);
-          }}
-        >
-          <strong style={{ color: ac.text, fontWeight: 600 }}>{item.title}</strong> is removed from WordPress for
-          good. Unlike posts and programs there is no Trash to restore it from, and any article or program still
-          using this file loses its image.
-        </ConfirmDialog>
-      ) : null}
     </div>
   );
 }

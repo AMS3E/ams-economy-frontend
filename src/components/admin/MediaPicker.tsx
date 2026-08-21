@@ -27,9 +27,15 @@ export interface PickedMedia {
   type?: string;
 }
 
+export type MediaKind = "image" | "video" | "audio";
+
+/** Grid-tile noun per kind, for the search placeholder and empty state. */
+const KIND_NOUN: Record<MediaKind | "all", string> = { image: "images", video: "videos", audio: "audio files", all: "files" };
+
 export default function MediaPicker({
   title = "Choose image",
   multiple = false,
+  kinds = ["image"],
   onPick,
   onPickMany,
   onClose,
@@ -38,6 +44,12 @@ export default function MediaPicker({
   /** Multi-select, for the gallery block. Off by default, so the featured-image
    *  and menu-icon callers behave exactly as before. */
   multiple?: boolean;
+  /** Which media types this caller can actually USE. One kind locks the picker
+   *  to it (no tab strip); several show a tab per kind plus "all". Defaults to
+   *  image-only, so the featured-image / poster / menu-icon callers can no
+   *  longer hand back an mp3 the way they could when every dialog showed all
+   *  four tabs. The block bridge passes each block's own `allowedTypes`. */
+  kinds?: MediaKind[];
   onPick: (m: PickedMedia) => void;
   /** Required when `multiple` — receives the whole selection, in click order. */
   onPickMany?: (list: PickedMedia[]) => void;
@@ -55,11 +67,12 @@ export default function MediaPicker({
   // selection survives paging away from the page it was made on.
   const [picked, setPicked] = useState<PickedMedia[]>([]);
   // The library is 115k items and overwhelmingly images; "all" exists because
-  // the file/video/audio blocks need it, not because anyone browses that way.
+  // the file block accepts anything, not because anyone browses that way.
   // There is deliberately NO date filter: neither read path takes a date range,
   // so it would mean a REST param, a fast.php resource change and another
   // plugin upload — not worth a deploy round trip for a search-first dialog.
-  const [kind, setKind] = useState<"image" | "video" | "audio" | "all">("image");
+  const locked = kinds.length === 1 ? kinds[0] : null;
+  const [kind, setKind] = useState<MediaKind | "all">(locked ?? "all");
 
   // Debounced browse: search resets to page 1; page changes fetch directly.
   // All state updates happen inside the timer callback (never synchronously in
@@ -104,7 +117,9 @@ export default function MediaPicker({
       setUploadErr(res.error ?? "Upload failed.");
       return;
     }
-    onPick({ id: res.id, thumb: res.thumb ?? "", url: res.url ?? res.thumb ?? "", alt: "" });
+    // Real mime/type, so a video uploaded inside a Video block's dialog reaches
+    // the block as a video, not the bridge's "image" default.
+    onPick({ id: res.id, thumb: res.thumb ?? "", url: res.url ?? res.thumb ?? "", alt: "", title: file.name, mime: file.type, type: file.type.split("/")[0] || "file" });
   };
 
   const items = result?.items ?? [];
@@ -124,7 +139,12 @@ export default function MediaPicker({
 
   return (
     <div
-      className={css({ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "32px" })}
+      // z-index has to clear the ARTICLE EDITOR'S BAND, which sits at 1000001
+      // because it in turn has to beat WordPress's own popover layer (1000000).
+      // At the old value of 100 this modal opened UNDERNEATH that band: the
+      // search box, the type filters and the Upload button were all covered by
+      // a strip of editor toolbar. A modal outranks a sticky toolbar — always.
+      className={css({ position: "fixed", inset: 0, zIndex: 1000050, display: "flex", alignItems: "center", justifyContent: "center", padding: "32px" })}
       style={{ background: ac.overlay }}
       onClick={onClose}
     >
@@ -150,15 +170,18 @@ export default function MediaPicker({
                 setSearch(e.target.value);
                 setPage(1);
               }}
-              placeholder={`Search ${result ? result.total.toLocaleString() : ""} images…`}
+              placeholder={`Search ${result ? result.total.toLocaleString() : ""} ${KIND_NOUN[kind]}…`}
               className={css({ width: "100%", height: "32px", padding: "0 11px 0 32px", borderRadius: "8px", fontSize: "13px" })}
               style={{ background: ac.canvas, border: `1px solid ${ac.border}`, color: ac.text }}
             />
           </div>
-          {/* Type filter. Segmented rather than a dropdown: four options, and
-              the current one has to be readable at a glance while picking. */}
+          {/* Type filter. Segmented rather than a dropdown: few options, and
+              the current one has to be readable at a glance while picking.
+              A single-kind caller gets no strip at all — there is nothing to
+              switch to. */}
+          {locked ? null : (
           <div className={css({ display: "flex", gap: "2px", padding: "2px", borderRadius: "8px" })} style={{ background: ac.canvas, border: `1px solid ${ac.border}` }}>
-            {(["image", "video", "audio", "all"] as const).map((k) => (
+            {([...kinds, "all"] as const).map((k) => (
               <button
                 key={k}
                 type="button"
@@ -174,9 +197,10 @@ export default function MediaPicker({
               </button>
             ))}
           </div>
+          )}
           <div className={css({ flex: 1 })} />
           <label
-            className={css({ height: "32px", padding: "0 14px", borderRadius: "8px", fontSize: "12.5px", fontWeight: 600, display: "flex", alignItems: "center", gap: "7px", cursor: "pointer", color: "#fff", transition: "background .12s", _hover: { background: ac.accentHover } })}
+            className={css({ height: "32px", padding: "0 14px", borderRadius: "8px", fontSize: "12.5px", fontWeight: 600, display: "flex", alignItems: "center", gap: "7px", cursor: "pointer", color: "var(--colors-admin-accent-fg)", transition: "background .12s", _hover: { background: ac.accentHover } })}
             style={{ background: ac.accent, opacity: uploading ? 0.7 : 1 }}
           >
             <Icon name="upload" size={13} strokeWidth={2} />
@@ -184,7 +208,9 @@ export default function MediaPicker({
             <input
               ref={fileRef}
               type="file"
-              accept="image/*"
+              // Match the active tab, so the OS file dialog pre-filters to what
+              // this caller can actually use.
+              accept={kind === "all" ? "image/*,video/*,audio/*" : `${kind}/*`}
               disabled={uploading}
               className={css({ display: "none" })}
               onChange={(e) => {
@@ -217,7 +243,7 @@ export default function MediaPicker({
             </div>
           ) : items.length === 0 ? (
             <div className={css({ padding: "48px", textAlign: "center", fontSize: "13px" })} style={{ color: ac.muted }}>
-              No images match.
+              No {KIND_NOUN[kind]} match.
             </div>
           ) : (
             <div className={css({ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "12px", opacity: loading ? 0.55 : 1, transition: "opacity .15s" })}>
@@ -234,13 +260,34 @@ export default function MediaPicker({
                     className={css({ display: "block", padding: 0, borderRadius: "9px", overflow: "hidden", cursor: "pointer", background: "transparent", position: "relative", transition: "border-color .12s, transform .12s", _hover: { transform: "translateY(-2px)" } })}
                     style={{ border: order >= 0 ? `2px solid ${ac.accent}` : `1px solid ${ac.border}` }}
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element -- admin thumbnails from the S3 host */}
-                    <img src={m.thumb} alt={m.alt || m.title} loading="lazy" style={{ width: "100%", aspectRatio: "1", objectFit: "cover", display: "block", background: ac.skeleton }} />
+                    {m.type === "image" && m.thumb ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- admin thumbnails from the S3 host
+                      <img src={m.thumb} alt={m.alt || m.title} loading="lazy" style={{ width: "100%", aspectRatio: "1", objectFit: "cover", display: "block", background: ac.skeleton }} />
+                    ) : m.type === "video" && m.url ? (
+                      <span className={css({ position: "relative", display: "block" })}>
+                        {/* First frame as the thumbnail — same trick as the Media
+                            grid (preload metadata + #t=0.1 for Safari). */}
+                        <video src={`${m.url}#t=0.1`} preload="metadata" muted playsInline className={css({ pointerEvents: "none" })} style={{ width: "100%", aspectRatio: "1", objectFit: "cover", display: "block", background: ac.skeleton }} />
+                        <span aria-hidden className={css({ position: "absolute", left: "6px", bottom: "6px", width: "22px", height: "22px", borderRadius: "11px", display: "flex", alignItems: "center", justifyContent: "center" })} style={{ background: "rgba(0,0,0,0.55)", color: "#fff" }}>
+                          <Icon name="play" size={12} strokeWidth={2} />
+                        </span>
+                      </span>
+                    ) : (
+                      // Audio/files have no visual at all — an icon card with
+                      // the filename is the only honest tile. (`thumb` falls
+                      // back to the media FILE itself, which an <img> renders
+                      // as the broken-image glyph.)
+                      <span className={css({ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "8px", width: "100%", aspectRatio: "1", padding: "10px" })} style={{ background: ac.surfaceSunken }}>
+                        <Icon name={m.type === "audio" ? "music" : "media"} size={22} strokeWidth={1.4} style={{ color: ac.faint }} />
+                        <span className={css({ fontSize: "11.5px", lineHeight: 1.4, textAlign: "center", lineClamp: 3, wordBreak: "break-word" })} style={{ color: ac.muted }}>{m.title}</span>
+                        <span className={css({ fontSize: "10px", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" })} style={{ color: ac.faint }}>{m.mime.split("/")[1] ?? m.type}</span>
+                      </span>
+                    )}
                     {order >= 0 ? (
                       // The NUMBER, not a tick: gallery order is the order you
                       // clicked, and it is the one thing a tick cannot show.
                       <span
-                        className={css({ position: "absolute", top: "6px", right: "6px", minWidth: "20px", height: "20px", borderRadius: "10px", fontSize: "11.5px", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" })}
+                        className={css({ position: "absolute", top: "6px", right: "6px", minWidth: "20px", height: "20px", borderRadius: "10px", fontSize: "11.5px", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--colors-admin-accent-fg)" })}
                         style={{ background: ac.accent }}
                       >
                         {order + 1}
@@ -280,7 +327,7 @@ export default function MediaPicker({
               type="button"
               disabled={picked.length === 0}
               onClick={() => onPickMany?.(picked)}
-              className={css({ height: "30px", padding: "0 14px", borderRadius: "8px", fontSize: "12.5px", fontWeight: 600, border: "none", color: "#fff", transition: "background .12s" })}
+              className={css({ height: "30px", padding: "0 14px", borderRadius: "8px", fontSize: "12.5px", fontWeight: 600, border: "none", color: "var(--colors-admin-accent-fg)", transition: "background .12s" })}
               style={{ background: ac.accent, opacity: picked.length === 0 ? 0.45 : 1, cursor: picked.length === 0 ? "default" : "pointer" }}
             >
               {picked.length === 0 ? "Select images" : `Insert ${picked.length}`}

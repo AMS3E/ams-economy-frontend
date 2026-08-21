@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { css } from "@/styled-system/css";
+import { css, cx } from "@/styled-system/css";
 import { ac } from "@/components/admin/tokens";
+import { ADMIN_FONT_STACK, adminFont } from "@/components/admin/font";
 import LoginForm from "@/components/admin/LoginForm";
 import { getSession } from "@/lib/auth/session";
 
@@ -21,14 +22,19 @@ export default async function LoginPage() {
 
   return (
     <main
-      className={css({
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "24px",
-      })}
-      style={{ background: ac.canvas, color: ac.text }}
+      // Same font as the shell behind it — sign-in is part of the tool, and it
+      // sits on the thin root layout where Battambang would otherwise win.
+      className={cx(
+        adminFont.variable,
+        css({
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "24px",
+        }),
+      )}
+      style={{ background: ac.canvas, color: ac.text, fontFamily: ADMIN_FONT_STACK }}
     >
       <LoginForm />
     </main>

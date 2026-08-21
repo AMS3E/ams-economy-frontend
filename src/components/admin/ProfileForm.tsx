@@ -46,7 +46,7 @@ export default function ProfileForm({ profile }: { profile: Profile }) {
   };
 
   return (
-    <div className={css({ padding: "28px 32px 48px", maxWidth: "760px" })}>
+    <div className={css({ maxWidth: "760px" })}>
       <PageHeader trail={[{ label: "Account" }, { label: "Profile" }]} title="Profile" sub="How you appear across the site." />
 
       <div className={css({ display: "flex", flexDirection: "column", gap: "16px", marginTop: "20px" })}>

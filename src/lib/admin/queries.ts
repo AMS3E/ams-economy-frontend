@@ -10,7 +10,7 @@
 
 import { useState } from "react";
 import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
-import { DEFAULT_STATUSES } from "./constants";
+import { DEFAULT_STATUSES, type DashRangeSpec } from "./constants";
 import type { PostListResult } from "./posts";
 import type { DashboardData } from "./dashboard";
 import type { CategoryNode } from "./categories";
@@ -87,7 +87,8 @@ export const adminKeys = {
   tags: (f: TagListFilters) => ["admin", "tags", f] as const,
   /** Every range of the dashboard — what Refresh invalidates. */
   dashboardRoot: ["admin", "dashboard"] as const,
-  dashboard: (range: number) => ["admin", "dashboard", range] as const,
+  dashboard: (range: DashRangeSpec) =>
+    ["admin", "dashboard", typeof range === "number" ? range : `${range.from}_${range.to}`] as const,
   categories: ["admin", "categories"] as const,
   authors: ["admin", "authors"] as const,
   programs: ["admin", "programs"] as const,
@@ -149,10 +150,13 @@ export function usePostsList(f: PostListFilters) {
 
 /* --- the rest (key + fetcher pairs exported for the login warm-up) --- */
 
-export function dashboardQuery(range: number = 30) {
+export function dashboardQuery(range: DashRangeSpec = 30) {
   return {
     queryKey: adminKeys.dashboard(range),
-    queryFn: () => bffGet<DashboardPayload>(`/api/admin/dashboard${qs({ range })}`),
+    queryFn: () =>
+      bffGet<DashboardPayload>(
+        `/api/admin/dashboard${typeof range === "number" ? qs({ range }) : qs({ from: range.from, to: range.to })}`,
+      ),
   };
 }
 
@@ -170,7 +174,7 @@ export function authorsQuery() {
   };
 }
 
-export function useDashboard(range: number = 30) {
+export function useDashboard(range: DashRangeSpec = 30) {
   // keepPreviousData: flipping the range control re-renders the existing chart
   // dimmed rather than dropping the whole screen back to skeletons.
   return useQuery({ ...dashboardQuery(range), placeholderData: keepPreviousData });

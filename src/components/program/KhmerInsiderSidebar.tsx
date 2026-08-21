@@ -108,8 +108,10 @@ export default function KhmerInsiderSidebar({
 
   if (!current) return null;
 
-  const internalHref = (href: string) => {
-    const episodeSlug = href.split("/").filter(Boolean).at(-1);
+  const internalHref = (episode: RailEpisode) => {
+    const labelledSlug = episode.label.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const liveSlug = episode.href.split("/").filter(Boolean).at(-1);
+    const episodeSlug = labelledSlug || (liveSlug !== programSlug ? liveSlug : "") || String(episode.id);
     return episodeSlug ? `/program/${programSlug}/${episodeSlug}` : `/program/${programSlug}`;
   };
   const khmerNumber = (number: number) =>
@@ -142,7 +144,7 @@ export default function KhmerInsiderSidebar({
           {current.cards.map((episode) => (
             <li key={episode.id}>
               <Link
-                href={internalHref(episode.href)}
+                href={internalHref(episode)}
                 className={row}
                 aria-current={episode.id === currentEpisodeId ? "page" : undefined}
               >
