@@ -41,7 +41,7 @@ export default function BelowArticle({ extras }: { extras: ArticleExtras }) {
       {/* AMS program posters — a scrolling carousel (live wraps it in a
           `section-movies-carousel`), not a grid. The one slot on the site that
           shows every program (live: 20); it used to be capped at 4. */}
-      <div className={css({ marginTop: "44px" })}>
+      <section id="special-programs" className={css({ marginTop: "44px" })}>
         <SectionHeader title="កម្មវិធីពិសេសរបស់ AMS ECONOMY" titleSize="20px" />
         <PosterCarousel
           posters={extras.programs.map((p) => ({
@@ -51,7 +51,7 @@ export default function BelowArticle({ extras }: { extras: ArticleExtras }) {
             href: programHref(p.slug),
           }))}
         />
-      </div>
+      </section>
 
       {/* Video news */}
       <div className={css({ marginTop: "40px" })}>

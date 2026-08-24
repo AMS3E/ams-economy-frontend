@@ -255,17 +255,16 @@ export default async function ArticlePage({ params }: Params) {
             <ReviveAdSlot zone={reviveHalfLandscape} />
           </div>
           <RelatedColumns recentReports={extras.recentReports} generalNews={extras.generalNews} />
+          {/* The live article template keeps these rails in the main two-thirds
+              column while the sidebar continues alongside them. This also
+              gives the fixed-width poster carousel the same four-card viewport
+              as WordPress instead of stretching it across the whole page. */}
+          <BelowArticle extras={extras} />
         </article>
 
         {/* sidebar */}
         <Sidebar sidebarLists={extras.sidebarLists} />
       </div>
-
-      {/* These rails belong below the article/sidebar pair and use the full
-          content width. Keeping them inside <article> squeezed every four-up
-          carousel into the main grid column, which made the cards and images
-          substantially smaller than the live layout. */}
-      <BelowArticle extras={extras} />
     </div>
   );
 }
