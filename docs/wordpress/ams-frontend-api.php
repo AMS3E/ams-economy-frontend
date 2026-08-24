@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AMS Frontend API
  * Description: General-purpose endpoints for the AMS Infotainment Next.js frontend (add new ones here as needed). Read-only + a standalone hero-slider embed + the homepage featured-program picker + anonymous REST commenting + per-user login tokens for authenticated writes + program custom-meta exposed to REST + skips AMS Cache's synchronous page warmer on dashboard writes (96s -> under 1s). Self-contained — deactivate/delete anytime with zero effect on anything else.
- * Version:     1.9.2
+ * Version:     1.9.4
  * Author:      Soth Kimleng
  *
  * Standalone "add endpoints as needed" API file, separate from the legacy
@@ -121,7 +121,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // The Slider Revolution alias shown as the homepage hero (and the fallback for
 // any ?alias= this plugin doesn't recognise).
-define( 'AMS_AFA_HERO_ALIAS', 'homepage-2' );
+define( 'AMS_AFA_HERO_ALIAS', 'cover-apr202021-11' );
 
 /**
  * The sliders /hero-embed may render, read off the live landing pages'
@@ -151,6 +151,7 @@ function ams_afa_hero_aliases() {
 function ams_afa_embed_origins() {
     return array(
         'http://localhost:3000',
+        'https://localhost:3000',
         'https://ams-infotainment-frontend.vercel.app',
         // 'https://your-custom-domain.com',   // ← add your real domain when you have one
     );

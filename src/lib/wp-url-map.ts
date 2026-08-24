@@ -16,8 +16,15 @@
 import { CURATED_PROGRAMS } from "@/lib/program-curation";
 import { programHref } from "@/lib/programs";
 
-/** WordPress origin that serves the embeds and owns these permalinks. */
-export const WP_ORIGIN = process.env.NEXT_PUBLIC_WP_ORIGIN ?? "https://economy.ams.com.kh";
+/**
+ * WordPress origin that serves the embeds and owns these permalinks.
+ *
+ * Trailing slash stripped defensively: this is compared against `MessageEvent.origin`
+ * (which is never slash-terminated) in HeroEmbed/SrEmbed's postMessage listeners, and a
+ * stray trailing slash on NEXT_PUBLIC_WP_ORIGIN silently breaks that comparison forever —
+ * no error, the hero just never receives its height and collapses after the 10s timeout.
+ */
+export const WP_ORIGIN = (process.env.NEXT_PUBLIC_WP_ORIGIN ?? "https://economy.ams.com.kh").replace(/\/+$/, "");
 
 const stripSlash = (p: string) => p.replace(/\/+$/, "") || "/";
 

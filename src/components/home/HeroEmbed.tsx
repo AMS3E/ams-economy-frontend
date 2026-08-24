@@ -6,20 +6,20 @@ import { css } from "@/styled-system/css";
 // Shared with the article-slider frames (SrEmbed): both forward slide clicks to
 // the parent and need the same answer for "is this WP URL one of ours?".
 import { mapWpUrl, WP_ORIGIN } from "@/lib/wp-url-map";
+import { HOME_HERO_ALIAS } from "@/lib/hero-alias";
 
 /**
  * Embeds a live Slider Revolution hero (authored in WordPress) via an iframe
- * pointing at /hero-embed. `alias` picks a landing page's own slider; omit it
- * for the homepage's (and note the embed serves the homepage slider for ANY
- * alias until the WP plugin is on ≥1.5.0 — the parameter is simply ignored).
+ * pointing at /sr-embed. `alias` picks a landing page's own slider; omit it for
+ * the homepage's. The route validates the alias against Slider Revolution's
+ * own module table, so it follows the live CMS without the older /hero-embed
+ * route's stale hand-maintained whitelist.
  *
- * The embed page posts its height so the iframe sizes responsively. Until that
- * arrives we reserve the hero's space and fill it with a shimmer placeholder,
- * then fade the iframe in — so the page never collapses to a 0px gap and jumps
- * when the slider boots (which is exactly how the hero used to "disappear while
- * loading"). If no height ever arrives (backend down or route removed), a ~10s
- * timeout drops the reservation so a dead slider collapses to nothing rather
- * than shimmering forever.
+ * The slider's grid ratios reserve the correct responsive height in CSS before
+ * hydration. The embed page's postMessage is only a late exact-height
+ * correction, so a message sent before this component's effect attaches can no
+ * longer leave the iframe at 0px (the old intermittent disappearing-banner
+ * bug).
  * It also forwards slide-link CLICKS as postMessage: every anchor in the
  * slider is an absolute WordPress URL, and before this the hero was a trapdoor
  * out of the app (AUDIT.md Tier 2 §14).
@@ -39,18 +39,22 @@ const placeholder = css({
 
 export default function HeroEmbed({ alias }: { alias?: string }) {
   const [height, setHeight] = useState(0);
-  const [gaveUp, setGaveUp] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
     function onMessage(e: MessageEvent) {
       if (e.origin !== WP_ORIGIN) return;
-      const data = e.data as { amsHeroHeight?: number; amsHeroNav?: string } | null;
+      const data = e.data as {
+        amsHeroHeight?: number;
+        amsHeroNav?: string;
+        amsEmbedHeight?: number;
+        amsEmbedNav?: string;
+      } | null;
 
-      const h = data?.amsHeroHeight;
+      const h = data?.amsEmbedHeight ?? data?.amsHeroHeight;
       if (typeof h === "number" && h > 0) setHeight(h);
 
-      const nav = data?.amsHeroNav;
+      const nav = data?.amsEmbedNav ?? data?.amsHeroNav;
       if (typeof nav === "string" && nav) {
         const mapped = mapWpUrl(nav);
         if (mapped) router.push(mapped);
@@ -58,19 +62,13 @@ export default function HeroEmbed({ alias }: { alias?: string }) {
       }
     }
     window.addEventListener("message", onMessage);
-    // Stop reserving space if the slider never reports a height, so a dead
-    // backend collapses to nothing instead of shimmering forever.
-    const timer = setTimeout(() => setGaveUp(true), 10000);
-    return () => {
-      window.removeEventListener("message", onMessage);
-      clearTimeout(timer);
-    };
+    return () => window.removeEventListener("message", onMessage);
   }, [router]);
 
-  const src = alias ? `${WP_ORIGIN}/hero-embed?alias=${encodeURIComponent(alias)}` : `${WP_ORIGIN}/hero-embed`;
+  const sliderAlias = alias ?? HOME_HERO_ALIAS;
+  const src = `${WP_ORIGIN}/sr-embed?alias=${encodeURIComponent(sliderAlias)}`;
 
-  const loaded = height > 0;
-  const reserving = !loaded && !gaveUp;
+  const measured = height > 0;
 
   return (
     <div
@@ -78,21 +76,23 @@ export default function HeroEmbed({ alias }: { alias?: string }) {
         position: "relative",
         width: "100%",
         overflow: "hidden",
-        // Reserve the hero's space up front so the page never collapses to a
-        // 0px gap and then jumps when WordPress finishes booting the slider.
-        // Dropped once the real height is known (or we give up), so the band
-        // settles to the slider's own size with no leftover gap.
-        minHeight: { base: "340px", md: "500px" },
+        // Slider Revolution's grid config is:
+        // gw [1840, 1840, 1024, 778, 480], gh [650, 650, 400, 350, 600].
+        // Match its effective breakpoints so the frame has the right height
+        // even when its early postMessage is missed during React hydration.
+        aspectRatio: "480 / 600",
+        "@media (min-width: 481px)": { aspectRatio: "778 / 350" },
+        "@media (min-width: 779px)": { aspectRatio: "1024 / 400" },
+        "@media (min-width: 1025px)": { aspectRatio: "1840 / 650" },
       })}
-      style={reserving ? undefined : { minHeight: 0 }}
+      style={measured ? { height: `${height}px` } : undefined}
     >
-      {reserving && <div className={placeholder} aria-hidden />}
+      <div className={placeholder} aria-hidden />
       <iframe
         src={src}
         title="Featured banners"
         loading="eager"
-        className={css({ display: "block", width: "100%", border: "0", transition: "opacity .35s ease" })}
-        style={{ height: `${height}px`, opacity: loaded ? 1 : 0 }}
+        className={css({ position: "absolute", inset: 0, display: "block", width: "100%", height: "100%", border: "0" })}
       />
     </div>
   );

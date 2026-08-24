@@ -357,7 +357,7 @@ feature is just broken" with nothing in the logs pointing at them**:
 
 - **The hero iframe needs the frontend origin in `ams_afa_embed_origins()`**
   (the `frame-ancestors` header) in the AMS Frontend API plugin. Done for
-  `localhost:3000` and the old Vercel domain — **NOT for `info.amscloud.cc`, so
+  both HTTP and HTTPS `localhost:3000` and the old Vercel domain — **NOT for `info.amscloud.cc`, so
   the hero is blank on the live site right now** ("refused to connect" in the
   iframe). Parked by the owner on 2026-08-10. Edit the LIVE plugin (the repo copy
   is source-only) and clear AMS Cache afterwards — that clear IS needed here,
@@ -366,23 +366,20 @@ feature is just broken" with nothing in the logs pointing at them**:
   `$allowed_origins`.**
 
 **Hero specifics:** it is a Slider Revolution slider embedded via `<iframe>` at
-`/hero-embed` rather than reconstructed, because the banners are flat image
-layers with no text or data to model. Each landing has its OWN slider alias —
-home=`homepage-2` (id 603), celebrity=`entainment-home-page-1`,
+`/sr-embed?alias=` rather than reconstructed, because the banners are flat image
+layers with no text or data to model. `/sr-embed` validates the alias against
+Slider Revolution's module table, avoiding `/hero-embed`'s hand-maintained
+whitelist. Each landing has its OWN slider alias —
+home=`cover-apr202021-11` (live Slider Revolution module `SR7_1931_1`), celebrity=`entainment-home-page-1`,
 life-style=`cover-animation-11` — passed via `?alias=` (whitelisted in the
 plugin; `AMS_AFA_HERO_ALIAS` is the default).
 
-**Known hero bug, deliberately deferred (owner: "fine for now"):** `HeroEmbed`
-renders the iframe at `height:0` until a `postMessage` arrives, but the WP page
-posts its height on load, on resize, and on an interval that **stops after 20
-ticks × 400ms = 8 seconds**. The parent attaches its listener in a `useEffect`,
-so every message sent before hydration is dropped. If hydration lands after
-that window the hero stays 0px until a resize or reload — so, counter-
-intuitively, *the faster WordPress loads, the more likely it breaks*. The fix is
-CSS-first: the slider's own config (`gw:[1840,1840,1024,778,480]`,
-`gh:[650,650,400,350,600]`, breakpoints `[1240,1024,778,480]`) makes the height
-a pure aspect ratio per breakpoint, so the space can be reserved with no JS and
-`postMessage` demoted to a late correction.
+**Hero sizing:** `HeroEmbed` reserves the slider's responsive height in CSS
+from its own config (`gw:[1840,1840,1024,778,480]`,
+`gh:[650,650,400,350,600]`, breakpoints `[1240,1024,778,480]`). The WordPress
+`postMessage` is only a late exact-height correction. Do not restore the old
+`height:0`-until-message behavior: the embed sends on load, resize, and only 20
+interval ticks, so hydration could miss every message and collapse the hero.
 
 ## 7. Owed to WordPress (not frontend work)
 

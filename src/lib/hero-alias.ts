@@ -2,12 +2,12 @@
 //
 // Read off the live pages' own markup (`data-alias` on the slider wrapper) —
 // several pages share one slider, which is the CMS's arrangement, not a typo.
-// The homepage's alias is the /hero-embed default and isn't listed.
-//
-// Any alias sent here must also be in the WP plugin's whitelist
-// (ams_afa_hero_aliases in docs/wordpress/ams-frontend-api.php) — the embed
-// falls back to the homepage slider for anything it doesn't recognise, which is
-// also exactly what happens everywhere until plugin ≥1.5.0 is deployed.
+// The homepage alias is exported separately because HomeView has no landing
+// path. /sr-embed validates every value here against Slider Revolution's own
+// module table before rendering it.
+
+// Slider Revolution editor: slide id 5994.
+export const HOME_HERO_ALIAS = "cover-apr202021-11";
 
 const HERO_ALIASES: Record<string, string> = {
   "entertainment-news": "cover-animation-14-12",
@@ -24,5 +24,5 @@ const HERO_ALIASES: Record<string, string> = {
 };
 
 /** The slider alias for a landing path ("life-style/travel"), or undefined for
- *  the homepage slider. */
+ * the homepage slider. */
 export const heroAlias = (path: string): string | undefined => HERO_ALIASES[path];

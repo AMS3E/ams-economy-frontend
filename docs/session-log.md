@@ -5,6 +5,38 @@ general one: Session 14 is the public menu, Session 15 the public fast read
 path, Session 20 the public site's article sliders. Entries are chronological,
 not split by area, because most of them touch both.
 
+## SESSION 25 (2026-08-24): homepage banner restored
+
+The local homepage hero was blank for two independent reasons.
+
+- `HeroEmbed` kept the iframe at `height:0` and `opacity:0` until a WordPress
+  `postMessage` arrived. The embed stops its retry loop after eight seconds, so
+  hydration could miss every message and the frontend's ten-second fallback
+  then collapsed the whole band. The frame now reserves the Slider Revolution
+  grid's exact responsive ratios in CSS and uses the message only as a late
+  height correction.
+- WordPress's live homepage now renders Slider Revolution alias
+  `cover-apr202021-11` (`SR7_1931_1`), while AMS Frontend API still defaulted to
+  the deleted `homepage-2`. `/hero-embed` therefore returned the Slider
+  Revolution error module with HTTP 200. AMS Frontend API **1.9.3** updates the
+  default/whitelist entry, and its zip was rebuilt at
+  `docs/wordpress/ams-frontend-api.zip`. The frontend now uses the already-live
+  `/sr-embed?alias=` route, which validates against Slider Revolution's module
+  table and therefore works immediately without waiting for that plugin upload.
+
+Verification: the current live homepage module reports the same responsive
+grid already documented (`1840×650`, `1024×400`, `778×350`, `480×600`); the
+frontend production build, TypeScript, focused ESLint and plugin PHP syntax all
+pass. The current plugin zip should still be uploaded so `/hero-embed` is repaired,
+but it is no longer a blocker for the frontend hero.
+
+Local development now runs with Next.js `--experimental-https` at
+`https://localhost:3000`. AMS Frontend API **1.9.4** also allows that HTTPS
+origin in the slider iframe's `frame-ancestors` policy; its upload zip was
+rebuilt. Until 1.9.4 is installed on WordPress, the browser will correctly run
+the frontend over SSL but WordPress will refuse to frame the slider on that
+origin.
+
 ## SESSION 24 (2026-08-14): ISR invalidation flow completed
 
 Audited the whole public cache path from `generateStaticParams` through cached
