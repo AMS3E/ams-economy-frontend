@@ -422,6 +422,55 @@ function fetchSeasonFragment(showId: number, season?: number) {
 /** The current Economy deployment has no khmer-insider-episode route, but the
  * canonical tv_show page server-renders the same episode-list markup. Resolve
  * its custom permalink through core REST rather than guessing it. */
+interface ShowPageRail {
+  episodes: RailEpisode[];
+  seasonLinks: string[];
+  activeSeasonLink: string;
+}
+
+function parseSeasonPageLinks(html: string, pageHref: string): { links: string[]; activeLink: string } {
+  const dropdown = html.match(/<ul class="season-dropdown"[^>]*>([\s\S]*?)<\/ul>/i)?.[1] ?? "";
+  const pageOrigin = new URL(pageHref).origin;
+  const links: string[] = [];
+
+  for (const match of dropdown.matchAll(/<a\b[^>]*href="([^"]+)"[^>]*data-season="\d+"[^>]*>/gi)) {
+    try {
+      const href = new URL(decodeEntities(match[1]), pageHref);
+      if (href.origin === pageOrigin && !links.includes(href.href)) links.push(href.href);
+    } catch {
+      // Ignore malformed CMS links; the already-rendered list is still usable.
+    }
+  }
+
+  const activeItem = dropdown.match(/<li\b[^>]*class="[^"]*\bactive\b[^"]*"[^>]*>[\s\S]*?<a\b[^>]*href="([^"]+)"/i);
+  let activeLink = "";
+  if (activeItem) {
+    try {
+      const href = new URL(decodeEntities(activeItem[1]), pageHref);
+      if (href.origin === pageOrigin) activeLink = href.href;
+    } catch {
+      // A malformed active link simply means its season page may be fetched again.
+    }
+  }
+
+  return { links, activeLink };
+}
+
+async function fetchShowPage(href: string, showId: number): Promise<ShowPageRail> {
+  const page = await fetch(href, {
+    next: { revalidate: false, tags: ["episodes", "program", `tv-show:${showId}`] },
+  });
+  if (!page.ok) return { episodes: [], seasonLinks: [], activeSeasonLink: "" };
+
+  const html = await page.text();
+  const seasons = parseSeasonPageLinks(html, href);
+  return {
+    episodes: parseEpisodeRailHtml(html),
+    seasonLinks: seasons.links,
+    activeSeasonLink: seasons.activeLink,
+  };
+}
+
 async function fetchShowPageRail(showId: number): Promise<RailEpisode[]> {
   const show = await apiFetch<{ link?: string }>(`/wp/v2/tv_show/${showId}?_fields=link`, {
     revalidate: false,
@@ -429,11 +478,20 @@ async function fetchShowPageRail(showId: number): Promise<RailEpisode[]> {
   });
   if (!show.link) return [];
 
-  const page = await fetch(show.link, {
-    next: { revalidate: false, tags: ["episodes", "program", `tv-show:${showId}`] },
-  });
-  if (!page.ok) return [];
-  return parseEpisodeRailHtml(await page.text()).sort(compareRailEpisodesDesc);
+  // WordPress renders only the active season's rows into a show page. Its
+  // dropdown links to one representative episode per season, so collect those
+  // pages as well. The active link represents the rows already present on the
+  // canonical page and can be skipped. Some CMS season buckets overlap label
+  // boundaries, hence the final id-based de-duplication and label sort.
+  const first = await fetchShowPage(show.link, showId);
+  const remainingLinks = first.seasonLinks.filter(href => href !== first.activeSeasonLink);
+  const remaining = await Promise.all(
+    remainingLinks.map(href => fetchShowPage(href, showId).catch(() => null)),
+  );
+  const all = [first, ...remaining.filter((page): page is ShowPageRail => page !== null)]
+    .flatMap(page => page.episodes);
+  const unique = [...new Map(all.map(episode => [episode.id, episode])).values()];
+  return unique.sort(compareRailEpisodesDesc);
 }
 
 /** A show's episode history as a decorative rail, newest first. The canonical

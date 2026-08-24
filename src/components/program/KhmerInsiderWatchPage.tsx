@@ -111,6 +111,7 @@ export default function KhmerInsiderWatchPage({
 
         <div className={sidebarArea}>
           <KhmerInsiderSidebar
+            key={current?.id ?? "program"}
             programSlug={programSlug}
             episodes={episodes}
             title={program.title}

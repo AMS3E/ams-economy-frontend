@@ -103,7 +103,10 @@ export default function KhmerInsiderSidebar({
     groups.set(season, group);
     return groups;
   }, new Map<number, RailEpisode[]>())].map(([number, cards]) => ({ number, cards }));
-  const [active, setActive] = useState(0);
+  const selectedSeason = seasons.findIndex(season =>
+    season.cards.some(episode => episode.id === currentEpisodeId),
+  );
+  const [active, setActive] = useState(selectedSeason >= 0 ? selectedSeason : 0);
   const current = seasons[active];
 
   if (!current) return null;
