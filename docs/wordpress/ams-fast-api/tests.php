@@ -743,6 +743,7 @@ t_same( array( 'a' => 1 ), ams_fast_unserialize( serialize( array( 'a' => 1 ) ) 
 
 $menus = ams_fast_public_menus();
 t_ok( is_array( $menus ) && count( $menus ) > 0, 'pub-menu: the allow-list is a non-empty array' );
+t_ok( in_array( 'secondary-nav-v3-menu', $menus, true ), 'pub-menu: the Economy program-icon strip is allowed' );
 t_ok( in_array( 'ams-infotainment-third-menu', $menus, true ), 'pub-menu: the program-icon strip is allowed' );
 t_ok( ! in_array( 'primary-menu', $menus, true ), 'pub-menu: an unlisted menu is NOT allowed' );
 t_ok( ! in_array( '', $menus, true ), 'pub-menu: the empty slug is not allowed (a missing ?menu= must 404)' );

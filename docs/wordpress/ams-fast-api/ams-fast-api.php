@@ -4,7 +4,7 @@
  * Description: SHORTINIT direct-SQL read path for the AMS admin dashboard. Serves
  *              the same data as WP REST at ~1/13th the cost by skipping the
  *              plugin/theme/hook/REST boot. INSTALL BUT DO NOT ACTIVATE.
- * Version:     1.6.0
+ * Version:     1.6.1
  * Author:      Soth Kimleng
  *
  * ---------------------------------------------------------------------------

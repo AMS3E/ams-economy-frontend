@@ -3,8 +3,9 @@
 // This is REAL data pulled from the live WordPress site (labels, links, and
 // CDN image URLs), shaped like a future CMS/API response. The pills stay
 // curated because their colors are design assets; the icon strip comes from
-// published Program posts; the poster list is curated but auto-appends new
-// published programs on the all-programs surfaces — see getFeaturedPrograms.
+// WordPress's public navigation-menu API; the poster list is curated but
+// auto-appends new published programs on the all-programs surfaces — see
+// getFeaturedPrograms.
 //
 // NO top-level import of the data layer here: MobileNav (a Client Component)
 // value-imports PROGRAM_ICON_LABEL from this module, so a static import of
@@ -61,45 +62,123 @@ export interface ProgramIcon {
   title: string;
   image: string;
   slug: string;
-  /** Internal page for the WordPress Program post. */
+  /** Destination configured on the WordPress menu item. */
   href: string;
 }
 
 /** Label that introduces the icon strip ("Digital content:"). */
 export const PROGRAM_ICON_LABEL = "មាតិកាឌីជីថល:";
 
-/** Exact compact logo artwork used by the header. Program identity, title and
- * destination still come from the matching WordPress Program record. Read
- * News is the sole custom-page item; WordPress has no Program post for it. */
-const PROGRAM_ICON_SLOTS = [
-  { slug: "financial-talk", image: "https://s3.ams.com.kh/economy/2021/05/02_FILO_PWPF-21x36.webp" },
-  { slug: "digital-literacy", image: "https://s3.ams.com.kh/economy/2025/04/09_DGLTS01_LDSM-01Primary-Logo_Horizontal.png" },
-  { slug: "industry4.0", image: "https://s3.ams.com.kh/economy/2025/03/01_IR4.0S01_ICOS.svg" },
-  { slug: "financial-literacy", image: "https://s3.ams.com.kh/economy/2025/03/03_FINLS02_PICN-new.png" },
-  { slug: "our-reources", image: "https://s3.ams.com.kh/economy/2025/02/01_ORESS01_ICOS.png" },
-  { slug: "hot-topic", image: "https://s3.ams.com.kh/economy/2022/12/HOT-TOPICS-LOGO-GIF-1.gif" },
-] as const;
-
-const READ_NEWS_ICON: ProgramIcon = {
-  title: "Read News",
-  image: "https://s3.ams.com.kh/economy/2022/09/READ-NEWS-LOGO-H32.svg",
-  slug: "read-news",
-  href: "https://economy.ams.com.kh/economic/read-news/",
-};
-
+/** The WordPress menu that renders as `#menu-secondary-nav-v3-menu` on the
+ * live Economy homepage. Its rows own the order, labels, destinations and logo
+ * attachments, so adding or editing a menu item no longer requires a frontend
+ * deploy. Core menu REST is private; fast.php's allow-listed `pub-menu`
+ * resource exposes only this already-public navigation data. */
 export async function getProgramIcons(): Promise<ProgramIcon[]> {
-  // Lazy for the reason in this file's header: MobileNav is a Client Component
-  // that value-imports PROGRAM_ICON_LABEL, so the server fetch layer must not
-  // become a top-level dependency of this module.
-  const { getProgramRegistry, programHref } = await import("./programs");
-  const programs = new Map((await getProgramRegistry()).map(program => [program.slug, program]));
-  const programIcons = PROGRAM_ICON_SLOTS.flatMap(slot => {
-    const program = programs.get(slot.slug);
-    return program
-      ? [{ title: program.title, image: slot.image, slug: program.slug, href: programHref(program.slug) }]
-      : [];
-  });
-  return [...programIcons, READ_NEWS_ICON];
+  const [{ fastPublicFetch }, { PROGRAM_ICON_MENU }, { fetchRenderedProgramIcons }, { CURATED_PROGRAMS }] = await Promise.all([
+    import("./api/fast-public"),
+    import("./admin/constants"),
+    import("./api/program-menu"),
+    import("./program-curation"),
+  ]);
+
+  try {
+    // Lazy because MobileNav is a Client Component that value-imports the
+    // label and types from this module. A top-level server fetch import would
+    // pull the API layer into that client bundle.
+    const env = await fastPublicFetch<{ data?: { items?: FastMenuItem[] } }>(
+      "pub-menu",
+      { menu: PROGRAM_ICON_MENU },
+      { revalidate: 3600, tags: ["menu"] },
+    );
+
+    return (env.data?.items ?? [])
+      .map((item) => toProgramIcon(item, CURATED_PROGRAMS))
+      .filter((icon): icon is ProgramIcon => icon !== null);
+  } catch {
+    // The live plugin may not have the Economy menu in its allow-list yet.
+    // Read the same menu from the public WordPress markup during that rollout
+    // gap; if WordPress itself is unavailable, keep this decoration optional.
+    return fetchRenderedProgramIcons()
+      .then((icons) => icons.map((icon) => ({ ...icon, href: localMenuHref(icon.href, CURATED_PROGRAMS) })))
+      .catch(() => []);
+  }
+}
+
+interface FastMenuImage {
+  source_url?: string;
+  sizes?: Record<string, { source_url?: string }>;
+}
+
+interface FastMenuItem {
+  id: number;
+  title: string;
+  url: string;
+  meta?: Record<string, string>;
+  images?: Record<string, FastMenuImage>;
+}
+
+/** A row without an attached icon is intentionally absent from the visual
+ * strip. This matches WordPress's menu-image output and the admin's existing
+ * “clear icon” behavior. */
+interface CuratedMenuProgram {
+  slug: string;
+  wpHref: string;
+}
+
+function toProgramIcon(item: FastMenuItem, curated: CuratedMenuProgram[]): ProgramIcon | null {
+  const image = menuImageUrl(item.images, item.meta?.["_menu_item_image_size"]);
+  if (!image) return null;
+
+  return {
+    title: item.title,
+    image,
+    slug: `menu-${item.id}`,
+    href: localMenuHref(item.url, curated),
+  };
+}
+
+/** Route WordPress program URLs through this frontend's `/program/<slug>`
+ * namespace. The curated table wins because several WordPress paths cannot be
+ * derived reliably; a new, ordinary `/movie/<slug>` falls back to that slug.
+ * Non-program WordPress pages (such as Read News) remain absolute because this
+ * frontend has no matching route and localizing them would create another 404. */
+function localMenuHref(href: string, curated: CuratedMenuProgram[]): string {
+  try {
+    const url = new URL(href);
+    if (url.hostname !== "economy.ams.com.kh") return href;
+
+    const pathKey = (value: string) => value.replace(/^https?:\/\/[^/]+/i, "").replace(/\/+$/, "");
+    const curatedMatch = curated.find((program) => pathKey(program.wpHref) === pathKey(url.pathname));
+    if (curatedMatch) return `/program/${curatedMatch.slug}`;
+
+    const ordinaryMovie = /^\/(?:movie|tv-show)\/([^/]+)\/?$/i.exec(url.pathname);
+    if (ordinaryMovie) {
+      try {
+        return `/program/${decodeURIComponent(ordinaryMovie[1])}`;
+      } catch {
+        return `/program/${ordinaryMovie[1]}`;
+      }
+    }
+
+    if (url.pathname.startsWith("/program/")) {
+      return `${url.pathname}${url.search}${url.hash}`;
+    }
+    return href;
+  } catch {
+    return href;
+  }
+}
+
+/** Use the rendition selected on the WordPress menu item. Falling back to the
+ * attachment's source URL also covers SVGs and items configured as `full`. */
+function menuImageUrl(images: FastMenuItem["images"], sizeName?: string): string {
+  for (const image of Object.values(images ?? {})) {
+    const sized = sizeName ? image.sizes?.[sizeName]?.source_url : undefined;
+    if (sized) return sized;
+    if (image.source_url) return image.source_url;
+  }
+  return "";
 }
 
 // ─── Program posters ─────────────────────────────────────────────────────────

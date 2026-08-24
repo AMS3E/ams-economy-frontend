@@ -30,6 +30,8 @@
  * draft pipeline, author leaderboard, programs in the activity feed) and its
  * counts are now capability-scoped rather than author-scoped — see that
  * resource's header for what the old shape got wrong and how it was measured.
+ * 1.6.1 allows Economy's `secondary-nav-v3-menu` through `pub-menu`, so the
+ * public header can use WordPress's current icon strip instead of code data.
  * Gates: users + roles require list_users; media requires edit_posts;
  * settings requires manage_options; programs/program/episode require the
  * (derived) program caps; profile is always the token's own user.
@@ -3218,7 +3220,7 @@ function ams_fast_res_pub_programs() {
 /* ===========================================================================
  * RESOURCE: pub-menu — a nav menu's items, for the public site's own menus
  * ---------------------------------------------------------------------------
- * The public site renders WordPress's "AMS Infotainment Third Menu" as its
+ * The public site renders WordPress's "Secondary Nav V3 Menu" as its
  * program-icon strip. Core REST CANNOT serve it: /wp/v2/menus and
  * /wp/v2/menu-items both answer 401 rest_cannot_view to anonymous callers
  * (measured 2026-08-05), because menus are an edit_theme_options surface in
@@ -3260,7 +3262,10 @@ function ams_fast_res_pub_programs() {
  *  public site has no business reading arbitrary menus by name. */
 function ams_fast_public_menus() {
 	return array(
+		// Economy's current program-icon strip (មាតិកាឌីជីថល).
+		'secondary-nav-v3-menu',
 		// The program-icon strip under the main nav (មាតិកាឌីជីថល).
+		// Retained for compatibility with the Infotainment installation.
 		'ams-infotainment-third-menu',
 		// Registered for the same strip on mobile + the secondary row.
 		'ams-infotainment-mobile',

@@ -2,7 +2,7 @@
 //
 // This is the CMS surface for the public site's own navigation — most visibly
 // the program-icon strip under the header (មាតិកាឌីជីថល), which is WordPress's
-// "AMS Infotainment Third Menu". Editing it here edits the SAME menu the old
+// "Secondary Nav V3 Menu". Editing it here edits the SAME menu the old
 // WordPress theme renders, so the two sites cannot drift apart.
 //
 // Reads go through core REST as the logged-in user, NOT the fast path: menus

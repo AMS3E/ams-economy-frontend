@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import ProgramIndex from "@/components/program/ProgramIndex";
 import { getFeaturedPrograms, POSTER_COUNT } from "@/lib/navigation";
 
-// Cache indefinitely; WordPress movie/tv_show saves invalidate the `program` tag.
 export const revalidate = false;
 
 export const metadata: Metadata = {
