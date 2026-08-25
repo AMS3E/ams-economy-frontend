@@ -356,7 +356,7 @@ interface WpEpisodeRail {
 // sample captured in AUDIT.md. `[\s\S]*?` because the title/meta sit a few
 // lines below the <img>, not on the same line.
 const RAIL_ITEM_RE =
-  /<a href="([^"]+)" data-ep="(\d+)" data-season="\d+"[^>]*>[\s\S]*?<img class="episode-thumb" src="([^"]*)"[\s\S]*?<p class="episode-title">([^<]*)<\/p>[\s\S]*?<p class="episode-meta">([^<]*)<\/p>/g;
+  /<a href="([^"]+)" data-ep="(\d+)" data-season="(\d+)"[^>]*>[\s\S]*?<img class="episode-thumb" src="([^"]*)"[\s\S]*?<p class="episode-title">([^<]*)<\/p>[\s\S]*?<p class="episode-meta">([^<]*)<\/p>/g;
 
 // The fragment's <img> is the smallest WordPress size crop (100x177) — fine
 // for the site's own admin list, blurry upscaled to our 224px poster cards.
@@ -367,7 +367,7 @@ const RAIL_ITEM_RE =
 const SIZE_SUFFIX_RE = /-\d+x\d+(?=\.\w+$)/;
 
 function parseEpisodeRailHtml(html: string): RailEpisode[] {
-  return [...html.matchAll(RAIL_ITEM_RE)].map(([, href, epId, thumb, title, meta]) => ({
+  return [...html.matchAll(RAIL_ITEM_RE)].map(([, href, epId, seasonIndex, thumb, title, meta]) => ({
     id: Number(epId),
     href,
     thumbnail: thumb.replace(SIZE_SUFFIX_RE, ""),
@@ -380,7 +380,20 @@ function parseEpisodeRailHtml(html: string): RailEpisode[] {
       // videos by data-ep. Their artwork still carries the canonical pair,
       // e.g. ORESS01_EP20_EWEP.jpg.
       const artwork = thumb.match(/S(\d+)[_-]?EP(\d+)/i);
-      return artwork ? `S${Number(artwork[1])}:E${Number(artwork[2])}` : "";
+      if (!artwork) return "";
+
+      const artworkSeason = Number(artwork[1]);
+      const episodeNumber = Number(artwork[2]);
+      const bucketSeason = Number(seasonIndex) + 1;
+
+      // The CMS bucket can overlap an adjacent labelled season (Khmer
+      // Insider's index 2 contains S3 and part of S4), so a one-season
+      // difference is legitimate and the artwork label remains preferable.
+      // A larger disagreement is a corrupt filename: Financial Literacy's
+      // S2:E20 image is named FINLS20_EP20, while data-season="1" and the
+      // episode record both correctly identify season 2.
+      const season = Math.abs(artworkSeason - bucketSeason) > 1 ? bucketSeason : artworkSeason;
+      return `S${season}:E${episodeNumber}`;
     })(),
     // PHP templates indent the text around `Added:` with tabs/newlines. Collapse
     // that formatting whitespace so the React row receives one clean sentence.

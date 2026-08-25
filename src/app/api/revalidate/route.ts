@@ -32,11 +32,12 @@ export async function POST(req: NextRequest) {
 
   const raws = searchParams.getAll("tag");
   if (raws.length === 0) raws.push("articles");
-  // "max" = serve stale content while regenerating in the background (longest
-  // stale-while-revalidate window). Ideal for CMS publish updates.
+  // External CMS webhooks need immediate expiry: the first visitor after a
+  // publish waits for regeneration and receives fresh content. Using "max"
+  // here would serve that visitor the stale entry while refreshing behind it.
   const tags = raws.map((raw) => {
     const tag = safeTag(raw);
-    revalidateTag(tag, "max");
+    revalidateTag(tag, { expire: 0 });
     return tag;
   });
 

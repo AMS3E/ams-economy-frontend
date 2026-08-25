@@ -83,6 +83,21 @@ const episodeTitle = css({
 });
 const meta = css({ margin: "3px 0 0", fontSize: "10px", lineHeight: 1.4, color: "muted" });
 
+/**
+ * Legacy program links are not consistent: newer seasons use `/s2e28`, while
+ * the original season often uses only `/e20`. In that second form, 20 is the
+ * episode number, not the season number. Prefer the permalink when it carries
+ * that distinction and keep the artwork-derived label as the fallback for
+ * programs whose links do not encode an episode pair.
+ */
+function seasonOf(episode: RailEpisode): number {
+  const slug = episode.href.split("/").filter(Boolean).at(-1) ?? "";
+  const labelledLink = slug.match(/^s(\d+)e\d+$/i);
+  if (labelledLink) return Number(labelledLink[1]);
+  if (/^e\d+$/i.test(slug)) return 1;
+  return Number(episode.label.match(/^S(\d+)(?::E\d+)?$/i)?.[1] ?? 0);
+}
+
 export default function KhmerInsiderSidebar({
   programSlug,
   episodes = [],
@@ -97,7 +112,7 @@ export default function KhmerInsiderSidebar({
   currentEpisodeId?: number;
 }) {
   const seasons = [...episodes.reduce((groups, episode) => {
-    const season = Number(episode.label.match(/^S(\d+)/)?.[1] ?? 0);
+    const season = seasonOf(episode);
     const group = groups.get(season) ?? [];
     group.push(episode);
     groups.set(season, group);

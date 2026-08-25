@@ -41,7 +41,9 @@ origin.
 
 Audited the whole public cache path from `generateStaticParams` through cached
 fetches, `/api/revalidate`, and the WordPress hooks. The one-hour classic ISR
-model and `revalidateTag(tag, "max")` SWR behavior stay unchanged.
+model stays unchanged. The webhook now uses
+`revalidateTag(tag, { expire: 0 })`, so its first post-invalidation visitor
+receives regenerated content instead of one stale SWR response.
 
 - `apiFetch` and `fastPublicFetch` now normalize every tag through `safeTag`,
   so long encoded slugs cannot be cached under a tag the webhook hashes
