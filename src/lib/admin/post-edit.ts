@@ -27,6 +27,10 @@ interface RawEditPost {
   categories: number[];
   tags: number[];
   featured_media: number;
+  /** Theme file that renders the post's TAIL on the WordPress site, e.g.
+   *  "templates/economic-template.php". "" is WordPress's "Default template",
+   *  which on this theme means nothing renders after the body. */
+  template?: string;
   password?: string;
   sticky?: boolean;
   meta?: Record<string, unknown>;
@@ -112,6 +116,10 @@ export interface EditablePost {
   /** URL for the cover PREVIEW on the editor sheet — a full-width crop, not a
    *  thumbnail despite the name. See pickCoverUrl. */
   featuredThumb: string;
+  /** The post template — see RawEditPost.template. Read back so the editor can
+   *  tell a DELIBERATE "Default template" from a post that was never given one,
+   *  which is the difference between leaving it alone and auto-filling it. */
+  template: string;
   /** Present only under context=edit. A protected post returns its real
    *  password here, which is why this whole object is admin-only. */
   password: string;
@@ -130,6 +138,9 @@ export interface PostWrite {
   categories?: number[];
   tags?: number[];
   featured_media?: number;
+  /** Post template. "" is a legal, meaningful value (WordPress's "Default
+   *  template"), so this is set-or-omit like `password`, never set-or-clear. */
+  template?: string;
   meta?: Record<string, string>;
   /** Visibility. Empty string CLEARS a password — WordPress treats the field as
    *  set-or-clear, so it must be sent as "" rather than omitted to unprotect. */
@@ -146,7 +157,7 @@ export async function getPostForEdit(id: number): Promise<EditablePost | null> {
   const { data } = await adminFetch<RawEditPost>(`/wp/v2/posts/${id}`, {
     query: {
       context: "edit",
-      _fields: "id,date,slug,status,link,title,content,excerpt,categories,tags,featured_media,password,sticky,meta,_links,_embedded",
+      _fields: "id,date,slug,status,link,title,content,excerpt,categories,tags,featured_media,template,password,sticky,meta,_links,_embedded",
       _embed: "wp:featuredmedia,wp:term",
     },
   });
@@ -173,6 +184,7 @@ export async function getPostForEdit(id: number): Promise<EditablePost | null> {
       .map((t) => ({ id: t.id, name: decodeEntities(t.name).trim() })),
     featuredMedia: data.featured_media ?? 0,
     featuredThumb: pickCoverUrl(media),
+    template: typeof data.template === "string" ? data.template : "",
     seo: {
       title: metaStr(data.meta, "_yoast_wpseo_title"),
       description: metaStr(data.meta, "_yoast_wpseo_metadesc"),
@@ -223,4 +235,37 @@ export async function createPost(fields: PostWrite): Promise<SavedPost> {
     body: { status: "draft", ...fields },
   });
   return data;
+}
+
+/** One post template the active theme registers. */
+export interface PostTemplate {
+  /** Theme-relative file, and the value `template` takes. */
+  file: string;
+  /** The concise label displayed in the article editor. */
+  name: string;
+}
+
+/**
+ * Economy's live theme vocabulary, confirmed from the stored `template` field
+ * of 200 recent posts on 2026-08-25. The current AMS Frontend API (1.9.4) does
+ * not expose `/wp/v2/web/post-templates`, so keeping this list local avoids a
+ * guaranteed slow 404 every time an editor opens.
+ */
+const ECONOMY_POST_TEMPLATES: readonly PostTemplate[] = [
+  { file: "templates/economic-template.php", name: "Economic" },
+  { file: "templates/start-up-innovation-template.php", name: "Start-up & Innovation" },
+  { file: "templates/finance-template.php", name: "Finance" },
+  { file: "templates/pr-template.php", name: "Commercial Article" },
+  { file: "templates/real-estate-template.php", name: "Real Estate" },
+  { file: "templates/business-template.php", name: "Business" },
+  { file: "templates/general-knowledge-template.php", name: "General Knowledge" },
+] as const;
+
+/**
+ * The post templates the live Economy theme offers, for the editor's Template
+ * control. Async keeps the page-loading contract compatible with a future
+ * switch to the plugin endpoint.
+ */
+export async function listPostTemplates(): Promise<PostTemplate[]> {
+  return [...ECONOMY_POST_TEMPLATES];
 }

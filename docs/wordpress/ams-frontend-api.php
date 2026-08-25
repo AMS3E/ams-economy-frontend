@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AMS Frontend API
  * Description: General-purpose endpoints for the AMS Infotainment Next.js frontend (add new ones here as needed). Read-only + a standalone hero-slider embed + the homepage featured-program picker + anonymous REST commenting + per-user login tokens for authenticated writes + program custom-meta exposed to REST + skips AMS Cache's synchronous page warmer on dashboard writes (96s -> under 1s). Self-contained — deactivate/delete anytime with zero effect on anything else.
- * Version:     1.9.4
+ * Version:     1.10.0
  * Author:      Soth Kimleng
  *
  * Standalone "add endpoints as needed" API file, separate from the legacy
@@ -43,6 +43,11 @@
  *        The same { id, name, username, roles, capabilities } for whoever the
  *        X-AMS-Token identifies. The frontend calls it to re-validate a stored
  *        session and refresh role gating. 401 when the token is missing/expired.
+ *
+ *  POST /wp-json/wp/v2/web/cache/purge  { post_id }        refresh AMS Cache
+ *        Deletes the WordPress site's cached HTML for the post, homepage,
+ *        taxonomy archives and published landing Pages. It deliberately does
+ *        not run AMS Cache's slow preload crawl. Gated on edit_posts.
  *
  *  GET /wp-json/wp/v2/web/roles                            all roles + caps (1.7.5)
  *        Every role with its display name, granted capability list and user
@@ -976,6 +981,306 @@ add_action( 'rest_api_init', function () {
         return $response;
     }, 10, 1 );
 }, 5 );
+
+/* ─────────── POST /wp-json/wp/v2/web/cache/purge  (dashboard → AMS Cache) ─── */
+
+add_action( 'rest_api_init', function () {
+    register_rest_route( 'wp/v2/web', 'cache/purge', array(
+        'methods'             => 'POST',
+        'callback'            => 'ams_afa_cache_purge',
+        'permission_callback' => function () {
+            return current_user_can( 'edit_posts' );
+        },
+        'args'                => array(
+            'post_id' => array( 'required' => true, 'type' => 'integer' ),
+        ),
+    ) );
+} );
+
+/** Optional emergency lever used only when AMS_AFA_CACHE_FLUSH_ALL is true. */
+function ams_afa_flush_all_cache() {
+    if ( ! function_exists( 'scm_driver_factory' ) ) {
+        return false;
+    }
+    if ( 'enable' !== get_option( 'scm_option_caching_status', 'disable' ) ) {
+        return false;
+    }
+
+    try {
+        $driver = scm_driver_factory( get_option( 'scm_option_driver', 'file' ) );
+        if ( is_object( $driver ) && method_exists( $driver, 'clear' ) ) {
+            $driver->clear();
+            return true;
+        }
+    } catch ( Throwable $e ) {
+        error_log( '[ams-afa] cache flush failed: ' . $e->getMessage() );
+    }
+    return false;
+}
+
+/** Published WordPress Pages can contain latest-article blocks without having
+ * a recorded relationship to the post, so include them as cache targets. */
+function ams_afa_landing_page_targets() {
+    $page_ids = get_posts( array(
+        'post_type'              => 'page',
+        'post_status'            => 'publish',
+        'numberposts'            => (int) apply_filters( 'ams_afa_landing_page_limit', 100 ),
+        'fields'                 => 'ids',
+        'no_found_rows'          => true,
+        'update_post_meta_cache' => false,
+        'update_post_term_cache' => false,
+    ) );
+
+    $targets = array();
+    foreach ( $page_ids as $page_id ) {
+        $url = get_permalink( $page_id );
+        if ( $url ) {
+            $targets[] = array( 'url' => $url, 'label' => get_the_title( $page_id ) );
+        }
+    }
+    return $targets;
+}
+
+/** Build the pages on which a post can appear, then deduplicate by URL path. */
+function ams_afa_cache_purge_targets( $post ) {
+    $targets = array(
+        array( 'url' => home_url( '/' ), 'label' => 'Homepage' ),
+    );
+
+    $permalink = get_permalink( $post );
+    if ( $permalink && 'trash' === $post->post_status ) {
+        $permalink = str_replace( '__trashed', '', $permalink );
+    }
+    if ( $permalink ) {
+        $type_obj = get_post_type_object( $post->post_type );
+        $targets[] = array(
+            'url'   => $permalink,
+            'label' => $type_obj ? $type_obj->labels->singular_name : 'Post',
+        );
+    }
+
+    if ( 'post' === $post->post_type ) {
+        $terms = get_the_terms( $post, 'category' );
+        if ( is_array( $terms ) ) {
+            $ids = array();
+            foreach ( $terms as $term ) {
+                $ids[] = (int) $term->term_id;
+                foreach ( get_ancestors( $term->term_id, 'category' ) as $ancestor ) {
+                    $ids[] = (int) $ancestor;
+                }
+            }
+            foreach ( array_unique( $ids ) as $term_id ) {
+                $url  = get_term_link( $term_id, 'category' );
+                $term = get_term( $term_id, 'category' );
+                if ( ! is_wp_error( $url ) && $term && ! is_wp_error( $term ) ) {
+                    $targets[] = array( 'url' => $url, 'label' => $term->name );
+                }
+            }
+        }
+
+        $tags = get_the_terms( $post, 'post_tag' );
+        if ( is_array( $tags ) ) {
+            foreach ( $tags as $tag ) {
+                $url = get_term_link( $tag );
+                if ( ! is_wp_error( $url ) ) {
+                    $targets[] = array( 'url' => $url, 'label' => $tag->name );
+                }
+            }
+        }
+    } else {
+        $archive = get_post_type_archive_link( $post->post_type );
+        if ( $archive ) {
+            $targets[] = array( 'url' => $archive, 'label' => 'Archive' );
+        }
+
+        // MasVideos stores a movie, its tv_show container and episodes as a
+        // linked family. A change to any member can stale the others' pages.
+        $show_id = 0;
+        if ( 'episode' === $post->post_type ) {
+            $show_id = (int) get_post_meta( $post->ID, '_tv_show_id', true );
+        } elseif ( 'movie' === $post->post_type ) {
+            $show_id = (int) get_post_meta( $post->ID, '_khi_tv_show_id', true );
+        } elseif ( 'tv_show' === $post->post_type ) {
+            $show_id = $post->ID;
+        }
+
+        if ( $show_id > 0 ) {
+            if ( 'tv_show' !== $post->post_type ) {
+                $show_url = get_permalink( $show_id );
+                if ( $show_url ) {
+                    $targets[] = array(
+                        'url'   => str_replace( '__trashed', '', $show_url ),
+                        'label' => get_the_title( $show_id ),
+                    );
+                }
+            }
+            if ( 'movie' !== $post->post_type ) {
+                $movie_ids = get_posts( array(
+                    'post_type'     => 'movie',
+                    'post_status'   => 'publish',
+                    'numberposts'   => 1,
+                    'fields'        => 'ids',
+                    'no_found_rows' => true,
+                    'meta_key'      => '_khi_tv_show_id',
+                    'meta_value'    => $show_id,
+                ) );
+                foreach ( $movie_ids as $movie_id ) {
+                    $movie_url = get_permalink( $movie_id );
+                    if ( $movie_url ) {
+                        $targets[] = array( 'url' => $movie_url, 'label' => get_the_title( $movie_id ) );
+                    }
+                }
+            }
+        }
+    }
+
+    $seen = array();
+    $out  = array();
+    foreach ( $targets as $target ) {
+        $path = parse_url( $target['url'], PHP_URL_PATH );
+        $path = ( is_string( $path ) && '' !== $path ) ? $path : '/';
+        if ( isset( $seen[ $path ] ) ) {
+            continue;
+        }
+        $seen[ $path ] = true;
+        $target['path'] = $path;
+        $out[] = $target;
+    }
+    return $out;
+}
+
+/**
+ * Purge AMS Cache after a dashboard write without triggering its synchronous
+ * preload crawl. Cache keys come from AMS Cache itself; they are never guessed.
+ * Sidecar cleanup is batched so dozens of targets require one filesystem scan.
+ */
+function ams_afa_cache_purge( WP_REST_Request $req ) {
+    $post = get_post( absint( $req->get_param( 'post_id' ) ) );
+    if ( ! $post ) {
+        return new WP_REST_Response( array( 'status' => 'ERROR', 'message' => 'post_id names no post' ), 200 );
+    }
+
+    if ( ! function_exists( 'scm_driver_factory' ) ) {
+        return new WP_REST_Response( array( 'status' => 'SKIPPED', 'message' => 'AMS Cache is not active', 'data' => array( 'pages' => array() ) ), 200 );
+    }
+    if ( 'enable' !== get_option( 'scm_option_caching_status', 'disable' ) ) {
+        return new WP_REST_Response( array( 'status' => 'SKIPPED', 'message' => 'AMS Cache page caching is disabled', 'data' => array( 'pages' => array() ) ), 200 );
+    }
+    if ( ! function_exists( 'scm_get_cache_key' ) ) {
+        return new WP_REST_Response( array( 'status' => 'ERROR', 'message' => 'AMS Cache is incompatible: scm_get_cache_key is missing' ), 200 );
+    }
+
+    try {
+        $driver = scm_driver_factory( get_option( 'scm_option_driver', 'file' ) );
+    } catch ( Throwable $e ) {
+        return new WP_REST_Response( array( 'status' => 'ERROR', 'message' => 'cache driver unavailable: ' . $e->getMessage() ), 200 );
+    }
+
+    $targets = array_merge( ams_afa_cache_purge_targets( $post ), ams_afa_landing_page_targets() );
+    if ( defined( 'AMS_AFA_CACHE_FLUSH_ALL' ) && AMS_AFA_CACHE_FLUSH_ALL && ams_afa_flush_all_cache() ) {
+        $pages = array_map( function ( $target ) {
+            return array( 'url' => $target['url'], 'label' => $target['label'], 'cached' => true, 'purged' => true );
+        }, $targets );
+        return new WP_REST_Response( array(
+            'status' => 'OK',
+            'data'   => array( 'driver' => (string) get_option( 'scm_option_driver', 'file' ), 'flushed' => true, 'pages' => $pages ),
+        ), 200 );
+    }
+
+    $seen     = array();
+    $pages    = array();
+    $keys     = array();
+    $uris     = array();
+    $n_cached = 0;
+    $n_purged = 0;
+
+    foreach ( $targets as $target ) {
+        $path = isset( $target['path'] ) ? $target['path'] : parse_url( $target['url'], PHP_URL_PATH );
+        $path = ( is_string( $path ) && '' !== $path ) ? $path : '/';
+        $norm = function_exists( 'scm_normalize_cache_uri' ) ? scm_normalize_cache_uri( $path ) : $path;
+        if ( isset( $seen[ $norm ] ) ) {
+            continue;
+        }
+        $seen[ $norm ] = true;
+        if ( function_exists( 'scm_is_cacheable_document_path' ) && ! scm_is_cacheable_document_path( $norm ) ) {
+            continue;
+        }
+
+        $cached = false;
+        $purged = false;
+        try {
+            $key    = scm_get_cache_key( $path );
+            $cached = (bool) $driver->has( $key );
+            $driver->delete( $key );
+            $purged = $cached && ! $driver->has( $key );
+            $keys[ $key ]  = true;
+            $uris[ $norm ] = true;
+        } catch ( Throwable $e ) {
+            error_log( '[ams-afa] cache purge failed for ' . $path . ': ' . $e->getMessage() );
+        }
+
+        if ( function_exists( 'scm_delete_nginx_static_cache' ) ) {
+            try {
+                scm_delete_nginx_static_cache( $path );
+            } catch ( Throwable $e ) {
+                error_log( '[ams-afa] nginx cache purge failed for ' . $path . ': ' . $e->getMessage() );
+            }
+        }
+
+        $n_cached += $cached ? 1 : 0;
+        $n_purged += $purged ? 1 : 0;
+        $pages[] = array(
+            'url'    => $target['url'],
+            'label'  => $target['label'],
+            'cached' => $cached,
+            'purged' => $purged,
+        );
+    }
+
+    if ( $keys && function_exists( 'scm_get_upload_dir' ) ) {
+        $stats_root = scm_get_upload_dir() . '/stats';
+        if ( is_dir( $stats_root ) ) {
+            try {
+                $iterator = new RecursiveIteratorIterator(
+                    new RecursiveDirectoryIterator( $stats_root, FilesystemIterator::SKIP_DOTS )
+                );
+                foreach ( $iterator as $file ) {
+                    if ( ! $file->isFile() || 'json' !== strtolower( $file->getExtension() ) ) {
+                        continue;
+                    }
+                    $file_key = strstr( $file->getFilename(), '.', true );
+                    $hit = isset( $keys[ $file_key ] );
+                    if ( ! $hit && function_exists( 'scm_read_stats_file' ) && function_exists( 'scm_normalize_cache_uri' ) ) {
+                        $stats = scm_read_stats_file( $file->getPathname() );
+                        if ( ! empty( $stats['uri'] ) && isset( $uris[ scm_normalize_cache_uri( $stats['uri'] ) ] ) ) {
+                            $hit = true;
+                            try {
+                                $driver->delete( $file_key );
+                            } catch ( Throwable $e ) {
+                                // The stale sidecar is still removed below.
+                            }
+                        }
+                    }
+                    if ( $hit ) {
+                        @unlink( $file->getPathname() ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+                    }
+                }
+            } catch ( Throwable $e ) {
+                error_log( '[ams-afa] cache stats sweep failed: ' . $e->getMessage() );
+            }
+        }
+    }
+
+    return new WP_REST_Response( array(
+        'status' => 'OK',
+        'data'   => array(
+            'driver' => (string) get_option( 'scm_option_driver', 'file' ),
+            'cached' => $n_cached,
+            'purged' => $n_purged,
+            'pages'  => $pages,
+        ),
+    ), 200 );
+}
 
 /* --- Settings screen (Settings → Frontend Cache) --- */
 

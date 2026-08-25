@@ -38,6 +38,11 @@ export interface EditorPayload {
   /** "Stick this post to the front page." Ours is a curated homepage, so it
    *  affects WordPress's own archives rather than our landing pages. */
   sticky: boolean;
+  /** Post template — the theme file that renders the article's TAIL on the
+   *  WordPress site. "" is WordPress's "Default template", which on this theme
+   *  means nothing renders below the body, so it is a real choice and is always
+   *  sent rather than omitted when empty. */
+  template: string;
   seo: { title: string; description: string; focus: string };
 }
 
@@ -66,6 +71,7 @@ function toWrite(p: EditorPayload): PostWrite {
     featured_media: p.featuredMedia,
     password: p.password,
     sticky: p.sticky,
+    template: p.template,
     meta: {
       _yoast_wpseo_title: p.seo.title,
       _yoast_wpseo_metadesc: p.seo.description,
@@ -97,7 +103,6 @@ export async function savePostAction(id: number, payload: EditorPayload): Promis
     return { ok: false, error: e instanceof AdminApiError ? "WordPress rejected the save. Check your permissions and try again." : "Couldn't save. Please try again." };
   }
 }
-
 export async function createPostAction(payload: EditorPayload): Promise<SaveResult> {
   try {
     const saved = await createPost(toWrite(payload));

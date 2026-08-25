@@ -8,8 +8,10 @@ import { css, cx } from "@/styled-system/css";
 import { ac, type Status } from "../tokens";
 import { Icon } from "../icons";
 import { Button, Checkbox, Input, StatusPill, Textarea } from "../ui";
-import type { EditablePost } from "@/lib/admin/post-edit";
+import type { EditablePost, PostTemplate } from "@/lib/admin/post-edit";
 import type { CategoryNode } from "@/lib/admin/categories";
+import { suggestTemplate } from "@/lib/admin/article-template";
+import { Dropdown } from "../Dropdown";
 import { savePostAction, createPostAction, type EditorPayload } from "@/lib/admin/actions";
 import { searchTags, type TagOption } from "@/lib/admin/editor-actions";
 import { createTag } from "@/lib/admin/screen-actions";
@@ -117,6 +119,16 @@ const STATUS_OPTIONS: { value: Status; title: string; desc: string }[] = [
   { value: "Published", title: "Published", desc: "Visible to everyone." },
 ];
 
+// (The title used to be seeded with dangerouslySetInnerHTML here, on the note
+// "React skips the DOM when __html is stable". MEASURED FALSE on React 19:
+// updateProperties compares that prop by OBJECT reference and an inline
+// `{{ __html }}` is a fresh object every render, so any re-render of the
+// element re-runs `innerHTML = …` and wipes what was typed. It only ever
+// survived because the React Compiler kept the element's identity stable —
+// protection that silently evaporates whenever anything in this component
+// makes the compiler bail. Seeded via a run-once ref callback instead: React
+// then manages NO children on the element, and no code path can reset it.)
+
 /** Which sidebar sections are folded open. Publish is not among them — it has
  *  no header and never collapses, because status is the one thing you look at
  *  on every single visit. */
@@ -126,14 +138,27 @@ export default function ArticleEditor({
   mode = "edit",
   post = null,
   categories,
+  templates = [],
 }: {
   mode?: "create" | "edit";
   post?: EditablePost | null;
   categories: CategoryNode[];
+  /** Post templates the live theme registers. Empty when ams-frontend-api is
+   *  below 1.19.0 or the call failed — the control still renders, with
+   *  "Default template" and whatever the post already carries. */
+  templates?: PostTemplate[];
 }) {
   const router = useRouter();
   const isCreate = mode === "create";
 
+  /* ---- The local backup (see editor-draft.ts for why it is NOT a WP draft).
+     `baselineRef` is what "clean" means: a JSON snapshot of the editor as it
+     stood once mounted (and re-captured after every successful save). Dirty =
+     current snapshot differs from it. `lastBackupRef` is what localStorage
+     currently holds, so the heartbeat only writes on change. `guardRef` is the
+     latest-closure escape hatch: the guards are wired up in mount-once effects
+     and timers, and dispatch through it so they always read THIS render's
+     state (the same reason GutenbergEditor reads blocks through blocksRef). */
   const backupKey = draftKey(isCreate ? null : post?.id ?? null);
   const [pendingBackup, setPendingBackup] = useState<{ at: number } | null>(null);
   const baselineRef = useRef<string | null>(null);
@@ -144,11 +169,22 @@ export default function ArticleEditor({
     isEditorDirty: () => boolean;
   } | null>(null);
 
-  // Uncontrolled canvas field — seeded once through the ref callback. React
-  // then manages no children here, so a parent re-render cannot wipe typing.
+  // Uncontrolled canvas field — seeded once by attachTitle, read through the ref.
   const titleRef = useRef<HTMLDivElement | null>(null);
   const titleSeededRef = useRef(false);
+  /** The title's text, mirrored on every edit. MEASURED NECESSARY: the unmount
+   *  backup flush runs from an effect cleanup, and React detaches refs BEFORE
+   *  effect cleanups — titleRef is already null there, so without the mirror
+   *  every back-navigation overwrote the backup with an EMPTY title (the body
+   *  survived, coming from plain refs, which is what made it look like "only
+   *  the title doesn't save"). The DOM stays the source of truth while the
+   *  element is alive; the mirror answers after it is gone. */
   const titleTextRef = useRef("");
+  /** Seeds the title's text on FIRST attach only (innerText, not innerHTML —
+   *  the value is plain text, so nothing needs escaping; see the note above
+   *  this component on why dangerouslySetInnerHTML had to go), and keeps
+   *  titleTextRef current via an input listener. Returns a ref cleanup
+   *  (React 19) so the listener and the ref are torn down together. */
   const attachTitle = useCallback(
     (el: HTMLDivElement | null) => {
       titleRef.current = el;
@@ -179,18 +215,36 @@ export default function ArticleEditor({
    *  it cannot claim "Loaded" over a page that is still coming up. */
   const [editorReady, setEditorReady] = useState(false);
   const registerBody = useCallback((h: BodyEditorHandle | null) => {
-    if (h === null && bodyRef.current) guardRef.current?.flushBackup();
+    if (h === null && bodyRef.current) {
+      // Deregistration IS the reliable leave-the-page hook for client-side
+      // navigation (browser back, sidebar Links, the post-create push): child
+      // cleanups run before parent ones on unmount, so by the time the guard
+      // effect's own cleanup fires, the body handle is already gone and a
+      // flush there reads nothing. Here the handle is still alive.
+      guardRef.current?.flushBackup();
+    }
     bodyRef.current = h;
     setEditorReady(h !== null);
     if (h) {
+      // The backup machinery arms HERE, not on mount: the baseline must read
+      // the body exactly as the editor parsed it (serialize∘parse differs from
+      // the stored bytes in insignificant whitespace, so comparing against the
+      // raw post would read as permanently dirty). Deferred a tick because
+      // guardRef is filled by an after-render effect. Everything inside is
+      // idempotent — dev StrictMode runs this twice.
       setTimeout(() => {
         const data = guardRef.current?.snapshotData();
-        if (!data) return;
+        if (!data) return; // unmounted again before the tick
         baselineRef.current ??= JSON.stringify(data);
         const existing = readDraft(backupKey);
         if (existing) {
-          if (JSON.stringify(existing.data) === baselineRef.current) clearDraft(backupKey);
-          else setPendingBackup({ at: existing.at });
+          if (JSON.stringify(existing.data) === baselineRef.current) {
+            // The backup matches what the editor already shows (a pagehide
+            // write raced a save that landed) — nothing to offer.
+            clearDraft(backupKey);
+          } else {
+            setPendingBackup({ at: existing.at });
+          }
         }
         pruneDrafts();
       }, 0);
@@ -224,6 +278,24 @@ export default function ArticleEditor({
   const [checked, setChecked] = useState<Record<number, boolean>>(
     Object.fromEntries((post?.categoryIds ?? []).map((id) => [id, true])),
   );
+  /**
+   * POST TEMPLATE — the theme file that renders the article's TAIL on the
+   * WordPress site. A post left on "Default template" shows NOTHING below the
+   * body, which is the defect this control exists to prevent.
+   *
+   * Auto-filled from the categories, then left alone the moment a human picks
+   * one (owner's rule, 2026-08-24). `templateTouched` starts TRUE for a post
+   * that already carries a template, because that is a choice somebody already
+   * made — re-suggesting over it on the next category tick would silently
+   * relayout a live article. A post with "" is treated as untouched, so opening
+   * one of the articles that has no tail today fills it in.
+   */
+  const [template, setTemplate] = useState(
+    () => post?.template || suggestTemplate(post?.categoryIds ?? [], categories),
+  );
+  const [templateTouched, setTemplateTouched] = useState(() => Boolean(post?.template));
+  const [tplOpen, setTplOpen] = useState(false);
+
   const [catSearch, setCatSearch] = useState("");
   /** The "Show all" dialog — every category at once, in columns, because the
    *  320px rail shows five at a time and finding one means scrolling. */
@@ -282,16 +354,28 @@ export default function ArticleEditor({
     toastTimer.current = setTimeout(() => setToast(null), 6000);
   };
 
+  /* ---- Backup + leave guard ------------------------------------------- */
+
+  /** The editor as one restorable value — the SAME serialization decides
+   *  dirtiness, feeds the backup, and becomes the baseline after a save.
+   *  Null until the body registers: before that there is nothing to compare. */
   const snapshotData = (): DraftData | null => {
     const body = bodyRef.current;
     if (!body) return null;
     return {
+      // Live DOM while the element exists; the mirror once refs are detached
+      // (the unmount flush) — see titleTextRef.
       title: (titleRef.current ? titleRef.current.innerText : titleTextRef.current).trim(),
       body: body.getHtml(),
       status: pubStatus,
       password,
       sticky,
-      categories: Object.keys(checked).filter((key) => checked[Number(key)]).map(Number).sort((a, b) => a - b),
+      categories: Object.keys(checked)
+        .filter((k) => checked[Number(k)])
+        .map(Number)
+        .sort((a, b) => a - b),
+      template,
+      templateTouched,
       tags,
       featuredId,
       featuredThumb,
@@ -307,47 +391,61 @@ export default function ArticleEditor({
     return data !== null && JSON.stringify(data) !== baselineRef.current;
   };
 
+  /** Write the backup if the editor holds unsaved changes; returns whether a
+   *  current backup now exists. HELD while a previous session's backup is
+   *  still awaiting its Restore/Discard decision — writing then would destroy
+   *  the very work the banner is offering to bring back. */
   const flushBackup = (): boolean => {
     if (pendingBackup || baselineRef.current === null) return false;
     const data = snapshotData();
     if (!data) return false;
-    const snapshot = JSON.stringify(data);
-    if (snapshot === baselineRef.current) {
+    const snap = JSON.stringify(data);
+    if (snap === baselineRef.current) {
+      // Edited back to clean — a backup from earlier this session would now
+      // claim changes that no longer exist, so it goes too.
       if (lastBackupRef.current !== null) {
         clearDraft(backupKey);
         lastBackupRef.current = null;
       }
       return false;
     }
-    if (snapshot !== lastBackupRef.current) {
+    if (snap !== lastBackupRef.current) {
       writeDraft(backupKey, data);
-      lastBackupRef.current = snapshot;
+      lastBackupRef.current = snap;
     }
     return true;
   };
 
   const restoreBackup = () => {
-    const draft = readDraft(backupKey);
+    const d = readDraft(backupKey);
     setPendingBackup(null);
-    if (!draft) return;
-    if (titleRef.current) titleRef.current.innerText = draft.data.title;
-    titleTextRef.current = draft.data.title;
+    if (!d) return; // evaporated (another tab, cleared storage) — nothing to do
+    if (titleRef.current) titleRef.current.innerText = d.data.title;
+    titleTextRef.current = d.data.title; // assignment fires no input event
+    // Only a body that actually differs is written back — an untouched body
+    // stays untouched, which keeps BodyEditor's dirty-tracking contract: a
+    // metadata-only recovery still sends no `content` on the next save.
     const body = bodyRef.current;
-    if (body && draft.data.body !== body.getHtml()) body.setHtml(draft.data.body);
-    setPubStatus(STATUS_OPTIONS.some((option) => option.value === draft.data.status) ? draft.data.status as Status : "Draft");
-    setPassword(draft.data.password);
-    setPwOpen(draft.data.password.trim().length > 0);
-    setSticky(draft.data.sticky);
-    setChecked(Object.fromEntries(draft.data.categories.map((id) => [id, true])));
-    setTags(draft.data.tags);
-    setFeaturedId(draft.data.featuredId);
-    setFeaturedThumb(draft.data.featuredThumb);
-    setExcerpt(draft.data.excerpt);
-    if (!everPublished) setSlug(draft.data.slug);
-    setSeoTitle(draft.data.seo.title);
-    setMetaDesc(draft.data.seo.description);
-    setFocusKw(draft.data.seo.focus);
-    lastBackupRef.current = JSON.stringify(draft.data);
+    if (body && d.data.body !== body.getHtml()) body.setHtml(d.data.body);
+    setPubStatus(STATUS_OPTIONS.some((o) => o.value === d.data.status) ? (d.data.status as Status) : "Draft");
+    setPassword(d.data.password);
+    setPwOpen(d.data.password.trim().length > 0);
+    setSticky(d.data.sticky);
+    setChecked(Object.fromEntries(d.data.categories.map((id) => [id, true])));
+    setTemplate(d.data.template);
+    setTemplateTouched(d.data.templateTouched);
+    setTags(d.data.tags);
+    setFeaturedId(d.data.featuredId);
+    setFeaturedThumb(d.data.featuredThumb);
+    setExcerpt(d.data.excerpt);
+    // A published article's slug is locked (live URLs never change here), so a
+    // backed-up slug from before the publish must not reappear in the metabox.
+    if (!everPublished) setSlug(d.data.slug);
+    setSeoTitle(d.data.seo.title);
+    setMetaDesc(d.data.seo.description);
+    setFocusKw(d.data.seo.focus);
+    // The store already holds exactly this — don't rewrite it on the next tick.
+    lastBackupRef.current = JSON.stringify(d.data);
     setSaveMsg({ kind: "ok", text: "Backup restored — not saved to WordPress yet" });
   };
 
@@ -357,35 +455,48 @@ export default function ArticleEditor({
     setPendingBackup(null);
   };
 
+  // Refresh the guards' view of this render — same latest-through-a-ref
+  // pattern as blocksRef in GutenbergEditor, for handlers wired up once below.
   useEffect(() => {
     guardRef.current = { snapshotData, flushBackup, isEditorDirty };
   });
 
+  /** The exit guards + the backup heartbeat, wired once. What each path gets:
+   *  tab close / refresh / external link → beforeunload warns AND pagehide
+   *  writes; an in-app link click → confirm() in capture phase (beforeunload
+   *  never fires on client-side navigation, which is exactly how work was
+   *  being lost); browser back / programmatic pushes → can't be intercepted in
+   *  the App Router, so the unmount flush persists instead of prompting; a
+   *  crash → the 5s heartbeat had already written. The backup is the real
+   *  safety net — the prompts are just courtesy. */
   useEffect(() => {
     const heartbeat = setInterval(() => guardRef.current?.flushBackup(), 5000);
-    const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      const guard = guardRef.current;
-      if (!guard) return;
-      guard.flushBackup();
-      if (!guard.isEditorDirty()) return;
-      event.preventDefault();
-      event.returnValue = "";
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      const g = guardRef.current;
+      if (!g) return;
+      g.flushBackup();
+      if (!g.isEditorDirty()) return;
+      e.preventDefault();
+      // Chrome still keys the prompt off returnValue; the text is ignored.
+      e.returnValue = "";
     };
     const onPageHide = () => guardRef.current?.flushBackup();
-    const onClickCapture = (event: MouseEvent) => {
-      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      const anchor = (event.target as HTMLElement | null)?.closest?.("a[href]");
-      if (!anchor || anchor.getAttribute("target") === "_blank" || anchor.hasAttribute("download")) return;
-      if ((anchor.getAttribute("href") ?? "").startsWith("#")) return;
-      const guard = guardRef.current;
-      if (!guard || !guard.isEditorDirty()) return;
-      const backedUp = guard.flushBackup();
-      const message = backedUp
-        ? "This article has unsaved changes. A backup was kept on this device. Leave anyway?"
-        : "This article has unsaved changes that could be lost. Leave anyway?";
-      if (!window.confirm(message)) {
-        event.preventDefault();
-        event.stopPropagation();
+    const onClickCapture = (e: MouseEvent) => {
+      // Modified clicks open a new tab — this page, and its state, stay put.
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = (e.target as HTMLElement | null)?.closest?.("a[href]");
+      if (!a) return;
+      if (a.getAttribute("target") === "_blank" || a.hasAttribute("download")) return;
+      if ((a.getAttribute("href") ?? "").startsWith("#")) return;
+      const g = guardRef.current;
+      if (!g || !g.isEditorDirty()) return;
+      const kept = g.flushBackup();
+      const msg = kept
+        ? "This article has unsaved changes.\n\nA backup was kept on this device — you'll be offered it when you come back to this article. Leave anyway?"
+        : "This article has unsaved changes that will be LOST — the earlier backup is still waiting for its Restore / Discard decision, so the new changes were not backed up.\n\nLeave anyway?";
+      if (!window.confirm(msg)) {
+        e.preventDefault();
+        e.stopPropagation(); // before Link's own handler — the navigation never starts
       }
     };
     window.addEventListener("beforeunload", onBeforeUnload);
@@ -396,6 +507,9 @@ export default function ArticleEditor({
       window.removeEventListener("beforeunload", onBeforeUnload);
       window.removeEventListener("pagehide", onPageHide);
       document.removeEventListener("click", onClickCapture, true);
+      // The unmount flush itself lives in registerBody's deregistration branch
+      // — by this point the body handle is already gone (child cleanups run
+      // first) and there is nothing left to read.
     };
   }, []);
 
@@ -412,24 +526,32 @@ export default function ArticleEditor({
    *  there via a sibling, or on purpose). Old posts that already violate the
    *  rule are NOT rewritten on open — the rule engages only on a click. */
   const toggleCategory = (id: number) => {
-    setChecked((s) => {
-      const next = { ...s, [id]: !s[id] };
-      if (next[id]) {
-        const parentOf = new Map(categories.map((c) => [c.id, c.parent]));
-        for (let p = parentOf.get(id) ?? 0; p > 0; p = parentOf.get(p) ?? 0) next[p] = true;
-      } else {
-        const drop = (pid: number) => {
-          for (const c of categories) {
-            if (c.parent === pid && next[c.id]) {
-              next[c.id] = false;
-              drop(c.id);
-            }
+    // Computed HERE rather than inside a setChecked updater: the template
+    // suggestion is derived from the same result, and an updater that also
+    // called setTemplate would be a side effect during React's render phase.
+    // This runs in an event handler, so reading `checked` from the closure is
+    // correct — and it keeps the auto-fill out of an effect, which the repo's
+    // React-compiler lint forbids anyway.
+    const next = { ...checked, [id]: !checked[id] };
+    if (next[id]) {
+      const parentOf = new Map(categories.map((c) => [c.id, c.parent]));
+      for (let p = parentOf.get(id) ?? 0; p > 0; p = parentOf.get(p) ?? 0) next[p] = true;
+    } else {
+      const drop = (pid: number) => {
+        for (const c of categories) {
+          if (c.parent === pid && next[c.id]) {
+            next[c.id] = false;
+            drop(c.id);
           }
-        };
-        drop(id);
-      }
-      return next;
-    });
+        }
+      };
+      drop(id);
+    }
+    setChecked(next);
+
+    if (!templateTouched) {
+      setTemplate(suggestTemplate(Object.keys(next).filter((k) => next[Number(k)]).map(Number), categories));
+    }
   };
 
   /**
@@ -448,7 +570,7 @@ export default function ArticleEditor({
     ? undefined
     : savedStatus === "Published"
       ? wpLink || undefined
-      : `${(process.env.NEXT_PUBLIC_WP_ORIGIN ?? "https://economy.ams.com.kh").replace(/\/+$/, "")}/?p=${post.id}&preview=true`;
+    : `${(process.env.NEXT_PUBLIC_WP_ORIGIN ?? "https://economy.ams.com.kh").replace(/\/+$/, "")}/?p=${post.id}&preview=true`;
 
   /**
    * ONE button, and it commits exactly the status the panel shows.
@@ -489,6 +611,22 @@ export default function ArticleEditor({
     ? categories.filter((c) => c.name.includes(catSearch.trim()))
     : null;
 
+  const checkedIds = Object.keys(checked).filter((k) => checked[Number(k)]).map(Number);
+
+  /** Menu rows: WordPress's own "Default template" first, then the theme's.
+   *  A value the theme no longer offers is appended rather than dropped — a
+   *  renamed or deleted template must stay VISIBLE, because silently rendering
+   *  it as "Default template" would make the control lie about the post. */
+  const templateSuggestion = suggestTemplate(checkedIds, categories);
+  const templateOptions = [
+    { label: "Default template", value: "" },
+    ...templates.map((t) => ({ label: t.name, value: t.file })),
+    ...(template && !templates.some((t) => t.file === template)
+      ? [{ label: `${template} (not in this theme)`, value: template }]
+      : []),
+  ];
+  const templateLabel = templateOptions.find((o) => o.value === template)?.label ?? "Default template";
+
   /** Saves at the SELECTED status. Returns whether it landed, so the confirm
    *  dialog can stay open on failure. */
   async function save(): Promise<boolean> {
@@ -515,6 +653,7 @@ export default function ArticleEditor({
       // when both are set — a 400 that loses every other edit in the payload.
       // The checkbox is disabled in that state; this is the belt to its braces.
       sticky: passwordProtected ? false : sticky,
+      template,
       seo: { title: seoTitle, description: metaDesc, focus: focusKw },
     };
     // Only a body the user actually edited is sent — an untouched (Gutenberg)
@@ -547,9 +686,12 @@ export default function ArticleEditor({
       setSaveMsg({ kind: "err", text: res.error ?? "Save failed." });
       return false;
     }
-    // Everything in the recovery snapshot has reached WordPress. Disarm
-    // writes before navigation, clear the stored backup, then recapture the
-    // committed editor state after React applies the save response.
+    // Everything the local backup holds just reached WordPress — drop it,
+    // close the banner if one was still up (the writer saved their own work
+    // over it), and re-arm the guard. Baseline goes null FIRST: it gates
+    // every backup write, so the deregistration flush after a create's
+    // router.push below cannot resurrect the backup this just cleared. The
+    // recapture waits a tick, for the state React is about to commit.
     clearDraft(backupKey);
     lastBackupRef.current = null;
     baselineRef.current = null;
@@ -694,6 +836,37 @@ export default function ArticleEditor({
             Not saved yet — press <strong style={{ color: ac.text, fontWeight: 600 }}>{primaryLabel}</strong> to apply it.
           </p>
         ) : null}
+
+        {/* TEMPLATE — which theme layout renders the article's TAIL on the
+            WordPress site ("Default template" renders nothing below the body).
+            A summary row beside Status rather than a section of its own (owner,
+            2026-08-24): it is one value, it is auto-filled from the categories,
+            and a fold with a single control in it is a fold that is always
+            either noise or in the way. */}
+        <div className={cx(rowBetween, css({ gap: "14px" }))} style={{ minHeight: 32 }}>
+          <span className={metaLabel} style={{ color: ac.muted, flex: "none" }}>Template</span>
+          <Dropdown
+            variant="link"
+            label={shortTemplateName(templateLabel)}
+            hasValue={template !== ""}
+            open={tplOpen}
+            onToggle={() => setTplOpen((o) => !o)}
+            onClose={() => setTplOpen(false)}
+            options={templateOptions}
+            selected={template}
+            onSelect={(v) => {
+              setTemplate(v);
+              // Picking the value the categories already suggest is AGREEMENT,
+              // not an override — auto-fill stays live so a later category
+              // change still moves it. Anything else takes the field over.
+              setTemplateTouched(v !== templateSuggestion);
+              setTplOpen(false);
+            }}
+            minWidth={248}
+            align="right"
+            className={css({ minWidth: 0 })}
+          />
+        </div>
 
         {statusOpen ? (
           <>
@@ -904,6 +1077,35 @@ export default function ArticleEditor({
         </button>
       </div>
 
+      {/* The local-backup banner — a backup of unsaved changes from an earlier
+          visit is waiting for a decision. A BANNER, not a toast: it must stay
+          up until Restore or Discard is pressed, because the heartbeat holds
+          all backup writes while the decision is open (writing would destroy
+          the recoverable work) — so it cannot be dismissible into limbo.
+          Gated on editorReady: Restore needs the body handle to exist. */}
+      {pendingBackup && editorReady ? (
+        <div
+          role="status"
+          className={css({ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "10px 12px", padding: "10px 20px", fontSize: "13px", lineHeight: 1.5 })}
+          style={{ background: ac.surface, borderBottom: `1px solid ${ac.border}`, borderLeft: `3px solid ${ac.warn}`, color: ac.text }}
+        >
+          <Icon name="clock" size={15} strokeWidth={1.9} style={{ color: ac.warn, flex: "none" }} />
+          <span>
+            Unsaved changes from{" "}
+            <strong style={{ fontWeight: 600 }}>{agoLabel(pendingBackup.at)}</strong> were backed up on
+            this device — that work never reached WordPress.
+          </span>
+          <div className={css({ display: "flex", gap: "8px", marginLeft: "auto", flex: "none" })}>
+            <Button size="sm" variant="primary" onClick={restoreBackup}>
+              Restore backup
+            </Button>
+            <Button size="sm" variant="ghost" onClick={discardBackup}>
+              Discard
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       {/* The media dialog is `position: fixed`, so it is rendered HERE rather
           than inside the sidebar section that opens it — a modal owned by a
           320px column with its own `overflow-y: auto` is one stacking-context
@@ -936,24 +1138,6 @@ export default function ArticleEditor({
           >
             <Icon name="x" size={12} strokeWidth={2.2} />
           </button>
-        </div>
-      ) : null}
-
-      {pendingBackup && editorReady ? (
-        <div
-          role="status"
-          className={css({ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "10px 12px", padding: "10px 20px", fontSize: "13px", lineHeight: 1.5 })}
-          style={{ background: ac.surface, borderBottom: `1px solid ${ac.border}`, borderLeft: `3px solid ${ac.warn}`, color: ac.text }}
-        >
-          <Icon name="clock" size={15} strokeWidth={1.9} style={{ color: ac.warn, flex: "none" }} />
-          <span>
-            Unsaved changes from <strong style={{ fontWeight: 600 }}>{agoLabel(pendingBackup.at)}</strong> were
-            backed up on this device and never reached WordPress.
-          </span>
-          <div className={css({ display: "flex", gap: "8px", marginLeft: "auto", flex: "none" })}>
-            <Button size="sm" variant="primary" onClick={restoreBackup}>Restore backup</Button>
-            <Button size="sm" variant="ghost" onClick={discardBackup}>Discard</Button>
-          </div>
         </div>
       ) : null}
 
@@ -1023,7 +1207,8 @@ export default function ArticleEditor({
         }
         header={
           <>
-            {/* Title (editable) — seeded once by the ref callback, read on save. */}
+            {/* Title (editable) — seeded once by attachTitle, read on save.
+                React manages no children here, so re-renders can't touch it. */}
             <div
               ref={attachTitle}
               contentEditable
@@ -1103,6 +1288,14 @@ function Section({
       {open ? <div className={css({ padding: "0 16px 18px" })}>{children}</div> : null}
     </div>
   );
+}
+
+/** Template display names all end in "-Article Block", which is 14 characters of
+ *  noise in a 320px rail where every one of them carries it. Dropped for the
+ *  header badge and the closed trigger; the full name stays in the menu and in
+ *  the title attribute. */
+function shortTemplateName(name: string): string {
+  return name.replace(/\s*-\s*Article Block$/i, "").trim() || name;
 }
 
 /** A selected-items count for a section header. Teal when there is something to

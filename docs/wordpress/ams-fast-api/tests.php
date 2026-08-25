@@ -72,7 +72,7 @@ define( 'AUTH_SALT', 's4lt-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 /** Stub, defined BEFORE fast.php so its function_exists() guards see it —
  *  only the options ams_fast_permalink() reads. */
 function get_option( $name, $default = false ) {
-	$fixture = array( 'home' => 'https://infotainment.ams.com.kh/' );
+	$fixture = array( 'home' => 'https://economy.ams.com.kh/' );
 	return isset( $fixture[ $name ] ) ? $fixture[ $name ] : $default;
 }
 
@@ -273,14 +273,14 @@ t_ok( ! in_array( 'inherit', ams_fast_known_statuses(), true ), 'inherit (attach
  * 6. ATTACHMENT URLS — the KH Offloader branch
  *
  * Shapes taken from the live site: uploads live at
- * https://s3.ams.com.kh/infotainment/2026/08/<file> when offloaded, and 642 of
+ * https://s3.ams.com.kh/economy/2026/08/<file> when offloaded, and 642 of
  * 115,405 attachments are NOT offloaded and must stay local.
  * ------------------------------------------------------------------------ */
 
 t_group( '6. attachment URL resolution' );
 
-$LOCAL = 'https://infotainment.ams.com.kh/wp-content/uploads';
-$CDN   = 'https://s3.ams.com.kh/infotainment';
+$LOCAL = 'https://economy.ams.com.kh/wp-content/uploads';
+$CDN   = 'https://s3.ams.com.kh/economy';
 
 $meta_full = serialize( array(
 	'file'  => '2026/08/fake-perfume.webp',
@@ -295,7 +295,7 @@ $offloaded = array(
 	'_wp_attached_file'         => '2026/08/fake-perfume.webp',
 	'_wp_attachment_metadata'   => $meta_full,
 	'_khs3data_webp_size_files' => serialize( array( 'fake-perfume-150x150.webp' ) ),
-	'khs3data_bucket'           => 'infotainment',
+	'khs3data_bucket'           => 'economy',
 	'khs3data_offloaded'        => '1',
 	'khs3data_offloaded_at'     => '1785815550',
 	'khs3data_path'             => '2026/08/',
@@ -350,7 +350,7 @@ t_same(
 $legacy_wpom = array(
 	'_wp_attached_file'       => '2019/03/legacy.jpg',
 	'_wp_attachment_metadata' => serialize( array( 'sizes' => array( 'thumbnail' => array( 'file' => 'legacy-150x150.jpg' ) ) ) ),
-	'amazonS3_info'           => serialize( array( 'bucket' => 'infotainment', 'key' => '2019/03/legacy.jpg', 'provider' => 'CephAMS' ) ),
+	'amazonS3_info'           => serialize( array( 'bucket' => 'economy', 'key' => '2019/03/legacy.jpg', 'provider' => 'CephAMS' ) ),
 );
 t_same(
 	$CDN . '/2019/03/legacy-150x150.jpg',
@@ -362,7 +362,7 @@ t_same( 'amazonS3_info', $how, '...resolved by the legacy branch' );
 $stored_url = array(
 	'_wp_attached_file'       => '2026/08/stored.webp',
 	'_wp_attachment_metadata' => serialize( array( 'sizes' => array( 'thumbnail' => array( 'file' => 'stored-150x150.webp' ) ) ) ),
-	'some_plugin_url'         => 'https://s3.ams.com.kh/infotainment/2026/08/stored.webp',
+	'some_plugin_url'         => 'https://s3.ams.com.kh/economy/2026/08/stored.webp',
 );
 t_same(
 	$CDN . '/2026/08/stored-150x150.webp',
@@ -424,7 +424,20 @@ $sized = array(
 	'khs3data_offloaded'      => '1',
 	'khs3data_path'           => '2026/08/',
 );
-t_same( $CDN . '/2026/08/sized-300x169.webp', ams_fast_attachment_url( $sized, $LOCAL, $how, array( 'medium' ) ), 'a medium-first chain picks the medium file (program posters)' );
+t_same( $CDN . '/2026/08/sized-300x169.webp', ams_fast_attachment_url( $sized, $LOCAL, $how, array( 'medium' ) ), 'a medium-first chain picks the medium file' );
+// Program posters (1.8.1): large-first for sharpness, medium when no large exists.
+t_same( $CDN . '/2026/08/sized-300x169.webp', ams_fast_attachment_url( $sized, $LOCAL, $how, array( 'large', 'medium' ) ), 'a large,medium chain falls to medium when no large rendition exists (program posters)' );
+$sized_large = $sized;
+$sized_large['_wp_attachment_metadata'] = serialize( array(
+	'width'  => 1920,
+	'height' => 1080,
+	'sizes'  => array(
+		'thumbnail' => array( 'file' => 'sized-150x150.webp' ),
+		'medium'    => array( 'file' => 'sized-300x169.webp' ),
+		'large'     => array( 'file' => 'sized-1024x576.webp' ),
+	),
+) );
+t_same( $CDN . '/2026/08/sized-1024x576.webp', ams_fast_attachment_url( $sized_large, $LOCAL, $how, array( 'large', 'medium' ) ), 'a large,medium chain picks large when it exists (program posters)' );
 t_same( $CDN . '/2026/08/sized.webp', ams_fast_attachment_url( $sized, $LOCAL, $how, array() ), 'an empty chain always yields the full-size file (media url)' );
 t_same( $CDN . '/2026/08/sized-150x150.webp', ams_fast_attachment_url( $sized, $LOCAL, $how, array( 'thumbnail', 'medium' ) ), 'thumbnail wins when present in a thumbnail,medium chain (media thumb)' );
 
@@ -506,8 +519,8 @@ t_same( 1, $counts['seo_manager'], 'a user with two roles counts in BOTH (count_
 
 t_group( '6e. permalinks' );
 
-t_same( 'https://infotainment.ams.com.kh/?p=221956', ams_fast_permalink( 221956 ), 'permalink uses the resolvable ?p= form' );
-t_same( 'https://infotainment.ams.com.kh/?p=1', ams_fast_permalink( '1' ), 'a numeric string id is coerced' );
+t_same( 'https://economy.ams.com.kh/?p=221956', ams_fast_permalink( 221956 ), 'permalink uses the resolvable ?p= form' );
+t_same( 'https://economy.ams.com.kh/?p=1', ams_fast_permalink( '1' ), 'a numeric string id is coerced' );
 t_ok( false === strpos( ams_fast_permalink( 5 ), '//?p=' ), 'the home option trailing slash does not double up' );
 
 /* ---------------------------------------------------------------------------
@@ -634,11 +647,11 @@ $lk_table = array(
 	'category/orphan/'                  => array( 'kind' => 'category' ),
 	'category/broken/'                  => 'not-an-array',
 );
-$lk = ams_fast_term_links( $lk_terms, $lk_table, 'https://infotainment.ams.com.kh/', '' );
-t_same( 'https://infotainment.ams.com.kh/category/celebrity/news/', $lk[959], 'custom permalink wins over the parent chain' );
-t_same( 'https://infotainment.ams.com.kh/category/entertainment-news/news/', $lk[957], 'FIRST table row wins on a duplicate id' );
-t_same( 'https://infotainment.ams.com.kh/category/all-news/', $lk[6913], 'no custom row: root falls back to /category/<slug>/' );
-t_same( 'https://infotainment.ams.com.kh/category/reports/', $lk[971], 'second root also derives' );
+$lk = ams_fast_term_links( $lk_terms, $lk_table, 'https://economy.ams.com.kh/', '' );
+t_same( 'https://economy.ams.com.kh/category/celebrity/news/', $lk[959], 'custom permalink wins over the parent chain' );
+t_same( 'https://economy.ams.com.kh/category/entertainment-news/news/', $lk[957], 'FIRST table row wins on a duplicate id' );
+t_same( 'https://economy.ams.com.kh/category/all-news/', $lk[6913], 'no custom row: root falls back to /category/<slug>/' );
+t_same( 'https://economy.ams.com.kh/category/reports/', $lk[971], 'second root also derives' );
 
 // The fallback walks the whole parent chain when there is no custom row.
 $lk2 = ams_fast_term_links( $lk_terms, array(), 'https://x.test', 'category' );
@@ -691,12 +704,12 @@ $md = ams_fast_media_details(
 		'khs3data_offloaded'      => '1',
 		'khs3data_path'           => '2021/09/',
 	),
-	'https://infotainment.ams.com.kh/wp-content/uploads'
+	'https://economy.ams.com.kh/wp-content/uploads'
 );
-t_same( 'https://s3.ams.com.kh/infotainment/2021/09/poster.jpg', $md['source_url'], 'offloaded original resolves to the CDN' );
+t_same( 'https://s3.ams.com.kh/economy/2021/09/poster.jpg', $md['source_url'], 'offloaded original resolves to the CDN' );
 t_same( 1000, $md['width'], 'original width' );
 t_same( 1500, $md['height'], 'original height' );
-t_same( 'https://s3.ams.com.kh/infotainment/2021/09/poster-300x450.jpg', $md['sizes']['khi-poster']['source_url'], 'the 300x450 rendition posterOf() prefers' );
+t_same( 'https://s3.ams.com.kh/economy/2021/09/poster-300x450.jpg', $md['sizes']['khi-poster']['source_url'], 'the 300x450 rendition posterOf() prefers' );
 t_same( 450, $md['sizes']['khi-poster']['height'], 'rendition dims carried' );
 t_ok( ! isset( $md['sizes']['corrupt-nofile'] ), 'a size row with no file is dropped, not emitted as a broken URL' );
 
@@ -705,9 +718,9 @@ $md_local = ams_fast_media_details(
 		'_wp_attached_file'       => '2021/09/poster.jpg',
 		'_wp_attachment_metadata' => $md_attmeta,
 	),
-	'https://infotainment.ams.com.kh/wp-content/uploads'
+	'https://economy.ams.com.kh/wp-content/uploads'
 );
-t_same( 'https://infotainment.ams.com.kh/wp-content/uploads/2021/09/poster.jpg', $md_local['source_url'], 'a never-offloaded file stays on the local uploads base' );
+t_same( 'https://economy.ams.com.kh/wp-content/uploads/2021/09/poster.jpg', $md_local['source_url'], 'a never-offloaded file stays on the local uploads base' );
 
 t_same( null, ams_fast_media_details( array(), 'https://x.test/uploads' ), 'no _wp_attached_file -> null (registry renders no poster)' );
 
@@ -776,7 +789,7 @@ $live_menu_meta = array(
 	'_menu_item_target'               => '',
 	'_menu_item_classes'              => 'a:1:{i:0;s:0:"";}',
 	'_menu_item_xfn'                  => '',
-	'_menu_item_url'                  => 'https://infotainment.ams.com.kh/tv-show/',
+	'_menu_item_url'                  => 'https://economy.ams.com.kh/tv-show/',
 	'_menu_item_icon'                 => '',         // the plugin's icon-CLASS field: EMPTY
 	'_menu_item_image_type'           => 'image',
 	'_menu_item_image_size'           => 'menu-36x36',
@@ -896,6 +909,22 @@ t_same( 30, ams_fast_clamp_days( 0 ), 'clamp_days: 0 falls back to 30' );
 t_same( 30, ams_fast_clamp_days( -5 ), 'clamp_days: a negative falls back to 30' );
 t_same( 30, ams_fast_clamp_days( 31 ), 'clamp_days: an arbitrary window is not honoured' );
 t_same( 30, ams_fast_clamp_days( 'drop table' ), 'clamp_days: a non-numeric falls back to 30' );
+
+$t_now = new DateTimeImmutable( '2026-08-16 09:30:00', new DateTimeZone( '+07:00' ) );
+t_same( array( '2026-07-18', '2026-08-16' ), ams_fast_custom_range( '2026-07-18', '2026-08-16', $t_now ), 'custom_range: a valid window passes through' );
+t_same( array( '2026-08-16', '2026-08-16' ), ams_fast_custom_range( '2026-08-16', '2026-08-16', $t_now ), 'custom_range: a single day is a 1-day window' );
+t_same( array( '2026-08-01', '2026-08-16' ), ams_fast_custom_range( '2026-08-01', '2026-09-30', $t_now ), 'custom_range: `to` in the future is capped at today' );
+t_same( array( '2026-05-19', '2026-08-16' ), ams_fast_custom_range( '2026-01-01', '2026-08-16', $t_now ), 'custom_range: the span is clamped to 90 days by moving `from` — the 57s probe' );
+t_same( array( null, null ), ams_fast_custom_range( '2026-08-16', '2026-08-01', $t_now ), 'custom_range: from after to is unusable' );
+t_same( array( null, null ), ams_fast_custom_range( '2026-02-31', '2026-08-16', $t_now ), 'custom_range: Feb 31 is refused, not repaired to Mar 3' );
+t_same( array( null, null ), ams_fast_custom_range( '', '', $t_now ), 'custom_range: absent pair falls back to the preset' );
+t_same( array( null, null ), ams_fast_custom_range( '18-07-2026', '2026-08-16', $t_now ), 'custom_range: wrong date shape is refused' );
+t_same( array( null, null ), ams_fast_custom_range( '2027-01-01', '2027-02-01', $t_now ), 'custom_range: a window entirely in the future is unusable' );
+
+t_same( 1, ams_fast_span_days( '2026-08-16', '2026-08-16' ), 'span_days: one day is 1' );
+t_same( 3, ams_fast_span_days( '2026-08-01', '2026-08-03' ), 'span_days: inclusive at both ends' );
+t_same( 90, ams_fast_span_days( '2026-05-19', '2026-08-16' ), 'span_days: the clamped maximum window is 90 days' );
+t_same( 31, ams_fast_span_days( '2026-07-01', '2026-07-31' ), 'span_days: a whole month' );
 
 t_same( '+07:00', ams_fast_tz_offset_name( 7 ), 'tz_offset_name: +7 (Asia/Phnom_Penh, this site)' );
 t_same( '+00:00', ams_fast_tz_offset_name( 0 ), 'tz_offset_name: zero is +00:00' );

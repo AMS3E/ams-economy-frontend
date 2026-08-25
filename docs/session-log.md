@@ -5,6 +5,66 @@ general one: Session 14 is the public menu, Session 15 the public fast read
 path, Session 20 the public site's article sliders. Entries are chronological,
 not split by area, because most of them touch both.
 
+## SESSION 30 (2026-08-25): Economy Fast API media bucket corrected
+
+The Featured image picker exposed a site-copy bug in Fast API: its CDN base and
+test fixtures still used `https://s3.ams.com.kh/infotainment`, while the same
+live Economy attachments resolve through core REST under
+`https://s3.ams.com.kh/economy`. The fast `pub-articles` response reproduced the
+wrong URL for attachment 173389, explaining the grid of broken thumbnails.
+
+Fast API now uses the Economy bucket and its URL/offloader fixtures use Economy
+hosts and bucket metadata. All tests pass and `ams-fast-api.zip` was rebuilt.
+**Replace the installed Fast API ZIP on WordPress and leave the plugin
+deactivated; until that manual upload, the live direct `fast.php` still emits
+the old `/infotainment/` URLs.**
+
+## SESSION 29 (2026-08-25): Economy Fast API aligned to 1.8.2
+
+Upgraded `docs/wordpress/ams-fast-api` from 1.6.1 to the reusable parts of
+Infotainment 1.8.2. The Admin frontend already consumed this contract. It now
+receives custom dashboard windows, fixed 24-hour trending, today's comparison,
+comment-moderation queue counts, and large-first program posters from the fast
+path instead of falling back or receiving partial data. Profile reads also
+understand the optional `ams_avatar` shape, but Economy still has no avatar
+write contract, so it safely remains null.
+
+The resulting source matches Infotainment 1.8.2 except that Economy retains its
+required `secondary-nav-v3-menu` public-menu allow-list entry and test. The Fast
+API remains read-only and deliberately separate from the REST cache-purge route
+in AMS Frontend API. PHP syntax, the real cross-plugin token round-trip and all
+244 Fast API assertions pass. **Upload/replace `ams-fast-api.zip` on WordPress
+but leave AMS Fast Read API deactivated; `fast.php` is invoked directly.**
+
+## SESSION 28 (2026-08-25): Economy WordPress cache purge backported
+
+AMS Frontend API **1.10.0** adds the authenticated
+`POST /wp-json/wp/v2/web/cache/purge` route required by the Admin's
+`economy.ams.com.kh · clearing cache…` flow. Only the current production purge
+implementation and its helpers were backported from Infotainment; Economy's
+hero aliases, embed origins and all other site configuration remain unchanged.
+
+The endpoint removes cached HTML for the article/program family, homepage,
+taxonomy archives and published WordPress Pages without running AMS Cache's
+slow preload crawl. It uses AMS Cache's own key functions, batches stats-file
+cleanup, returns `SKIPPED` when page caching is absent/off, and has an opt-in
+`AMS_AFA_CACHE_FLUSH_ALL` emergency lever. PHP syntax and the upload ZIP were
+verified locally. **The rebuilt `docs/wordpress/ams-frontend-api.zip` still
+needs manually replacing on Economy WordPress before the live 404 is fixed.**
+
+## SESSION 27 (2026-08-25): Economy article templates added
+
+Added the article editor's Template control after measuring the stored
+`template` field across 200 recent live Economy posts. The seven observed
+Economy templates are listed locally because the Economy plugin does not
+provide Infotainment's `/wp/v2/web/post-templates` endpoint; core WordPress does
+already read and write the post's template value. New/untouched articles infer
+their template from Economy's seven topic category IDs and fall back to the
+dominant Economic template, while an editor's explicit choice remains pinned.
+
+Profile avatars remain excluded because their upload/removal flow still needs
+the newer WordPress plugin and fast-path contracts.
+
 ## SESSION 26 (2026-08-25): reusable Infotainment Admin improvements ported
 
 Compared the Economy Admin with `D:\ASM\ams-infotainment-frontend` and ported
@@ -14,11 +74,10 @@ draft recovery plus leave guards, Gutenberg's bottom appender, the measured
 media-spacing behavior, and portal/font fixes for the media picker and shared
 dropdown. Economy branding, API origins, menu slug and SEO labels remain local.
 
-Profile avatars and post-template selection were deliberately not copied:
-those require AMS Frontend API 1.20.0/1.19.0 respectively, while Economy's
-plugin source is 1.9.4, and the template suggestions contain
-Infotainment-specific category IDs. Port the backend contract and re-measure
-Economy's categories before enabling either feature.
+Profile avatars were deliberately not copied because they require AMS Frontend
+API 1.20.0; Economy's plugin does not carry that contract. Template selection was added
+in Session 27 after Economy's own categories and stored values were measured;
+it does not require the newer endpoint because its verified vocabulary is local.
 
 ## SESSION 25 (2026-08-24): homepage banner restored
 

@@ -30,8 +30,17 @@
  * draft pipeline, author leaderboard, programs in the activity feed) and its
  * counts are now capability-scoped rather than author-scoped — see that
  * resource's header for what the old shape got wrong and how it was measured.
- * 1.6.1 allows Economy's `secondary-nav-v3-menu` through `pub-menu`, so the
- * public header can use WordPress's current icon strip instead of code data.
+ * 1.7.0 adds `trending` to the same payload: the top-5 ranking again, over a
+ * FIXED 24-hour window that ignores the range control. 1.8.0 adds `today`
+ * (views since midnight vs yesterday-to-the-same-clock-time, stories filed
+ * today, most-read of the last hour; 120s memo), `queue.comments` (moderation
+ * queue, moderate_comments-gated), and CUSTOM windows: ?from/?to (Y-m-d,
+ * inclusive, span clamped to 90 days) override ?days for the series, top list
+ * and leaderboard, while the KPI cards stay pinned to 7-vs-prior-7 ending
+ * today via their own mini-series. 1.8.1: program posters resolve large-first
+ * (large -> medium -> full) so the admin grid stops upscaling the 300px medium.
+ * 1.8.2 retains Economy's `secondary-nav-v3-menu` alongside the shared AMS
+ * menu slugs, so the public header can read its current program-icon strip.
  * Gates: users + roles require list_users; media requires edit_posts;
  * settings requires manage_options; programs/program/episode require the
  * (derived) program caps; profile is always the token's own user.
@@ -72,7 +81,7 @@
  * IMAGES — the one genuinely awkward part
  * -----------------------------------------------------------------------------
  * Media on this site is offloaded to S3 (KH Offloader -> https://s3.ams.com.kh,
- * bucket "infotainment", path-style, no path prefix, no file versioning). WP
+ * bucket "economy", path-style, no path prefix, no file versioning). WP
  * REST returns S3 URLs only because the offloader FILTERS them at runtime —
  * and filters do not run here.
  *
@@ -132,7 +141,7 @@ if ( ! defined( 'AMS_FAST_DIAG_TOKEN' ) ) {
 /** KH Offloader -> Custom Domain (CDN URL), verbatim, no trailing slash.
  *  Override in wp-config.php if the bucket or domain ever changes. */
 if ( ! defined( 'AMS_FAST_CDN_BASE' ) ) {
-	define( 'AMS_FAST_CDN_BASE', 'https://s3.ams.com.kh/infotainment' );
+	define( 'AMS_FAST_CDN_BASE', 'https://s3.ams.com.kh/economy' );
 }
 
 /** Object-cache group + a version prefix. Bump the version to invalidate every
@@ -1025,7 +1034,12 @@ function ams_fast_hydrate_posts( array $rows ) {
  * So the payload now answers an editor's three morning questions:
  *   1. what is blocked on me   -> `queue`   (review age, draft pipeline, stuck)
  *   2. what happened since     -> `series` + `kpi`  (daily traffic + output)
- *   3. what is working         -> `top` + `authors`
+ *   3. what is working         -> `top` + `trending` + `authors`
+ *
+ * `trending` (1.7.0) is `top`'s query over a FIXED 24-hour window: momentum,
+ * not standing — so it deliberately does NOT follow the range control, and the
+ * two lists may overlap. Same null contract as `top` when the summary table is
+ * missing (the frontend then pays WPP's REST call with range=last24hours).
  *
  * SCOPE. `edit_others_posts` decides. Holders get the newsroom (site-wide post
  * counts, the whole review queue, the author leaderboard); everyone else gets
@@ -1058,7 +1072,7 @@ function ams_fast_hydrate_posts( array $rows ) {
  * ======================================================================== */
 
 function ams_fast_res_dashboard( array $user, array $caps ) {
-	global $wpdb, $T_POSTS, $T_TERMS, $T_TERMTAX, $T_TERMREL, $AMS_FAST_BOOT_MS;
+	global $wpdb, $T_POSTS, $T_COMMENTS, $T_TERMS, $T_TERMTAX, $T_TERMREL, $AMS_FAST_BOOT_MS;
 
 	$uid   = (int) $user['id'];
 	$scope = ams_fast_can( $caps, 'edit_others_posts' ) ? 'all' : 'own';
@@ -1073,27 +1087,52 @@ function ams_fast_res_dashboard( array $user, array $caps ) {
 	/* ---- the window, on the SITE's clock (see the header note) ---- */
 
 	$days  = ams_fast_clamp_days( ams_fast_int_param( 'days', 30 ) );
-	$fetch = max( $days, 14 ); // the KPI deltas need 7 days + the 7 before
 	$tz    = ams_fast_site_tz();
 	$today = new DateTimeImmutable( 'now', $tz );
 
+	/* CUSTOM window (1.8.0): ?from=Y-m-d&to=Y-m-d (site-local, inclusive)
+	 * overrides ?days for every range-scoped view — the series, the top list,
+	 * the leaderboard. Validated and clamped by ams_fast_custom_range(): `to`
+	 * capped at today, the span at 90 days (the 57-second 365-day probe is why
+	 * the ceiling exists at all), and an unusable pair falls back to ?days. */
+	list( $c_from, $c_to ) = ams_fast_custom_range( ams_fast_param( 'from' ), ams_fast_param( 'to' ), $today );
+	$custom = null !== $c_from;
+
 	/* TWO bounds, and they are not interchangeable.
-	 *   $start       — the SERIES window. Always at least 14 days, because the
-	 *                  KPI cards compare the last 7 days with the 7 before and
-	 *                  a 7-day request must still carry both.
+	 *   $start       — the SERIES window. On presets, always at least 14 days,
+	 *                  because the KPI cards compare the last 7 days with the 7
+	 *                  before and a 7-day request must still carry both. On a
+	 *                  custom window it is simply the window (KPIs get their own
+	 *                  mini-series below — a historical window cannot feed a
+	 *                  card pinned to "the last 7 days ending today").
 	 *   $start_range — the window the user actually SELECTED. What the top list
 	 *                  and the leaderboard cover, so every dated view on the
 	 *                  screen agrees with the range control. Using $start for
-	 *                  those would silently widen a 7-day request to 14. */
-	$start       = $today->modify( '-' . ( $fetch - 1 ) . ' days' )->format( 'Y-m-d' ) . ' 00:00:00';
+	 *                  those would silently widen a 7-day request to 14.
+	 *   $end_excl    — exclusive upper bound, custom windows only: presets end
+	 *                  "now" and need none. */
+	$fetch       = max( $days, 14 );
+	$start       = $custom ? $c_from . ' 00:00:00' : $today->modify( '-' . ( $fetch - 1 ) . ' days' )->format( 'Y-m-d' ) . ' 00:00:00';
 	$start_d     = substr( $start, 0, 10 );
-	$start_range = $today->modify( '-' . ( $days - 1 ) . ' days' )->format( 'Y-m-d' ) . ' 00:00:00';
+	$series_days = $custom ? ams_fast_span_days( $c_from, $c_to ) : $fetch;
+	$end_excl    = $custom
+		? DateTimeImmutable::createFromFormat( '!Y-m-d', $c_to, $tz )->modify( '+1 day' )->format( 'Y-m-d' ) . ' 00:00:00'
+		: null;
+	$start_range = $custom ? $c_from . ' 00:00:00' : $today->modify( '-' . ( $days - 1 ) . ' days' )->format( 'Y-m-d' ) . ' 00:00:00';
 	$stale_at    = $today->modify( '-30 days' )->format( 'Y-m-d H:i:s' );
 
 	/* ---- queue: what is blocked on this user ---- */
 
 	$t0    = microtime( true );
-	$queue = array( 'pending' => 0, 'drafts' => 0, 'draftsStale' => 0, 'scheduled' => 0, 'oldest' => null );
+	$queue = array( 'pending' => 0, 'drafts' => 0, 'draftsStale' => 0, 'scheduled' => 0, 'comments' => 0, 'oldest' => null );
+
+	/* Comments awaiting moderation (1.8.0) — the fourth thing blocked on an
+	 * editor. Gated by moderate_comments, the same cap wp-admin's own queue
+	 * checks; everyone else keeps 0 rather than a site-wide count they cannot
+	 * act on. All comment types, matching wp_count_comments(). */
+	if ( ams_fast_can( $caps, 'moderate_comments' ) ) {
+		$queue['comments'] = (int) $wpdb->get_var( "SELECT COUNT(*) FROM $T_COMMENTS WHERE comment_approved = '0'" );
+	}
 
 	$sql       = "SELECT post_status, COUNT(*) n FROM $T_POSTS
 		 WHERE post_type = 'post' AND post_status IN ('draft','pending','future')$own_sql
@@ -1146,10 +1185,12 @@ function ams_fast_res_dashboard( array $user, array $caps ) {
 	/* ---- series: stories published per day (cheap, scope-aware) ---- */
 
 	$t0        = microtime( true );
+	$until_sql = null !== $end_excl ? ' AND post_date < %s' : '';
 	$sql       = "SELECT DATE(post_date) d, COUNT(*) n FROM $T_POSTS
-		 WHERE post_type = 'post' AND post_status = 'publish' AND post_date >= %s$own_sql
+		 WHERE post_type = 'post' AND post_status = 'publish' AND post_date >= %s$until_sql$own_sql
 		 GROUP BY DATE(post_date)";
-	$post_rows = $wpdb->get_results( $wpdb->prepare( $sql, array_merge( array( $start ), $own_params ) ) );
+	$bounds    = null !== $end_excl ? array( $start, $end_excl ) : array( $start );
+	$post_rows = $wpdb->get_results( $wpdb->prepare( $sql, array_merge( $bounds, $own_params ) ) );
 
 	$posts_by_day = array();
 	foreach ( (array) $post_rows as $row ) {
@@ -1164,34 +1205,79 @@ function ams_fast_res_dashboard( array $user, array $caps ) {
 	$views_by_day = array();
 	$has_views    = false;
 	if ( $has_summary ) {
-		$has_views = true;
-		$cached    = ams_fast_cache_get( 'wpp:series:' . $fetch, $hit );
+		$has_views  = true;
+		$series_key = $custom ? 'wpp:series:c:' . $c_from . ':' . $c_to : 'wpp:series:' . $fetch;
+		$cached     = ams_fast_cache_get( $series_key, $hit );
 		if ( $hit && is_array( $cached ) ) {
 			$views_by_day = $cached;
 		} else {
+			$until_v   = null !== $end_excl ? ' AND view_datetime < %s' : '';
 			$view_rows = $wpdb->get_results(
 				$wpdb->prepare(
 					"SELECT DATE(view_datetime) d, SUM(pageviews) v
 					 FROM $summary_table
-					 WHERE view_datetime >= %s
+					 WHERE view_datetime >= %s$until_v
 					 GROUP BY DATE(view_datetime)",
-					$start
+					$bounds
 				)
 			);
 			foreach ( (array) $view_rows as $row ) {
 				$views_by_day[ (string) $row->d ] = (int) $row->v;
 			}
-			ams_fast_cache_set( 'wpp:series:' . $fetch, $views_by_day, AMS_FAST_TTL_REFERENCE );
+			ams_fast_cache_set( $series_key, $views_by_day, AMS_FAST_TTL_REFERENCE );
 		}
 	}
 
-	$series    = ams_fast_fill_days( $start_d, $fetch, $views_by_day, $posts_by_day );
+	$series    = ams_fast_fill_days( $start_d, $series_days, $views_by_day, $posts_by_day );
+
+	/* ---- KPI: this 7 days vs the 7 before, PINNED to today ----
+	 *
+	 * On presets the display series ends today and carries >= 14 days, so the
+	 * cards read straight off its tail. A custom window is a slice of the past
+	 * — its tail says nothing about "the last 7 days" — so the cards get their
+	 * own 14-day mini-series ending today, same queries, same memo key the
+	 * 7-day preset uses. */
+
+	if ( $custom ) {
+		$k_start = $today->modify( '-13 days' )->format( 'Y-m-d' ) . ' 00:00:00';
+
+		$sql        = "SELECT DATE(post_date) d, COUNT(*) n FROM $T_POSTS
+			 WHERE post_type = 'post' AND post_status = 'publish' AND post_date >= %s$own_sql
+			 GROUP BY DATE(post_date)";
+		$k_rows     = $wpdb->get_results( $wpdb->prepare( $sql, array_merge( array( $k_start ), $own_params ) ) );
+		$k_posts    = array();
+		foreach ( (array) $k_rows as $row ) {
+			$k_posts[ (string) $row->d ] = (int) $row->n;
+		}
+
+		$k_views = array();
+		if ( $has_summary ) {
+			$cached = ams_fast_cache_get( 'wpp:series:14', $hit );
+			if ( $hit && is_array( $cached ) ) {
+				$k_views = $cached;
+			} else {
+				$k_view_rows = $wpdb->get_results(
+					$wpdb->prepare(
+						"SELECT DATE(view_datetime) d, SUM(pageviews) v
+						 FROM $summary_table WHERE view_datetime >= %s
+						 GROUP BY DATE(view_datetime)",
+						$k_start
+					)
+				);
+				foreach ( (array) $k_view_rows as $row ) {
+					$k_views[ (string) $row->d ] = (int) $row->v;
+				}
+				ams_fast_cache_set( 'wpp:series:14', $k_views, AMS_FAST_TTL_REFERENCE );
+			}
+		}
+		$series_kpi = ams_fast_fill_days( substr( $k_start, 0, 10 ), 14, $k_views, $k_posts );
+	} else {
+		$series_kpi = $series;
+	}
 	$ms_series = ams_fast_ms( microtime( true ) - $t0 );
 
-	/* ---- KPI: this 7 days vs the 7 before, straight off the series ---- */
-
-	list( $views7, $views_prev7 )       = ams_fast_tail_sums( $series, 7, 'views' );
-	list( $published7, $published_prev ) = ams_fast_tail_sums( $series, 7, 'posts' );
+	list( $views7, $views_prev7 )       = ams_fast_tail_sums( $series_kpi, 7, 'views' );
+	list( $published7, $published_prev ) = ams_fast_tail_sums( $series_kpi, 7, 'posts' );
 
 	$kpi = array(
 		'views7'         => $views7,
@@ -1205,12 +1291,13 @@ function ams_fast_res_dashboard( array $user, array $caps ) {
 	$t0      = microtime( true );
 	$authors = null;
 	if ( 'all' === $scope ) {
+		$until_a     = null !== $end_excl ? ' AND post_date < %s' : '';
 		$author_rows = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT post_author, COUNT(*) n FROM $T_POSTS
-				 WHERE post_type = 'post' AND post_status = 'publish' AND post_date >= %s
+				 WHERE post_type = 'post' AND post_status = 'publish' AND post_date >= %s$until_a
 				 GROUP BY post_author ORDER BY n DESC, post_author ASC LIMIT 6",
-				$start_range
+				null !== $end_excl ? array( $start_range, $end_excl ) : array( $start_range )
 			)
 		);
 		$ids  = array();
@@ -1236,71 +1323,87 @@ function ams_fast_res_dashboard( array $user, array $caps ) {
 	 * dated view on the screen describes the same slice. Memoised per range —
 	 * three keys at most, since `days` is clamped to 7/30/90. */
 
-	$t0     = microtime( true );
-	$top    = null;
-	$cached = ams_fast_cache_get( 'wpp:top5:v2:' . $days, $hit );
+	$t0      = microtime( true );
+	$top     = null;
+	$top_key = $custom ? 'wpp:top5:c:' . $c_from . ':' . $c_to : 'wpp:top5:v2:' . $days;
+	$cached  = ams_fast_cache_get( $top_key, $hit );
 	if ( $hit && is_array( $cached ) ) {
 		$top = $cached;
 	} elseif ( $has_summary ) {
-		$top_rows = $wpdb->get_results(
-			$wpdb->prepare(
-				"SELECT s.postid, SUM(s.pageviews) views, p.post_title, p.post_author, p.post_date
-				 FROM $summary_table s
-				 INNER JOIN $T_POSTS p ON p.ID = s.postid
-				 WHERE p.post_type = 'post' AND p.post_status = 'publish'
-				   AND s.view_datetime >= %s
-				 GROUP BY s.postid, p.post_title, p.post_author, p.post_date
-				 ORDER BY views DESC
-				 LIMIT 5",
-				$start_range
-			)
-		);
-		$top = array();
-		foreach ( (array) $top_rows as $row ) {
-			$top[] = array(
-				'id'     => (int) $row->postid,
-				'title'  => (string) $row->post_title,
-				'views'  => (int) $row->views,
-				'author' => (int) $row->post_author,
-				'date'   => str_replace( ' ', 'T', (string) $row->post_date ),
-			);
-		}
-		ams_fast_cache_set( 'wpp:top5:v2:' . $days, $top, AMS_FAST_TTL_REFERENCE );
+		$top = ams_fast_wpp_ranked( $summary_table, $start_range, 5, $end_excl );
+		ams_fast_cache_set( $top_key, $top, AMS_FAST_TTL_REFERENCE );
+	}
+
+	/* ---- trending now: the same ranking, over the last 24 HOURS (1.7.0) ----
+	 *
+	 * Momentum rather than standing, so the window is FIXED — flipping the range
+	 * control must not change what "now" means. One cache key for the same
+	 * reason. The bound is computed off $today (site clock), like every other
+	 * bound here. */
+
+	$trending = null;
+	$cached   = ams_fast_cache_get( 'wpp:trending24:v1', $hit );
+	if ( $hit && is_array( $cached ) ) {
+		$trending = $cached;
+	} elseif ( $has_summary ) {
+		$trending = ams_fast_wpp_ranked( $summary_table, $today->modify( '-24 hours' )->format( 'Y-m-d H:i:s' ), 5 );
+		ams_fast_cache_set( 'wpp:trending24:v1', $trending, AMS_FAST_TTL_REFERENCE );
 	}
 
 	// Author and desk names are resolved OUTSIDE the memo, so a renamed author
 	// or re-filed story is current even while the view counts are up to 5
 	// minutes old.
-	if ( is_array( $top ) && $top ) {
-		$top_ids    = array();
-		$author_ids = array();
-		foreach ( $top as $row ) {
-			$top_ids[]    = (int) $row['id'];
-			$author_ids[] = (int) $row['author'];
-		}
-		$names      = ams_fast_author_names( ams_fast_id_list( $author_ids ) );
-		$desks      = array();
-		$top_ids    = ams_fast_id_list( $top_ids );
-		$term_rows  = $wpdb->get_results(
-			$wpdb->prepare(
-				"SELECT tr.object_id, t.name
-				 FROM $T_TERMREL tr
-				 INNER JOIN $T_TERMTAX tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
-				 INNER JOIN $T_TERMS t ON t.term_id = tt.term_id
-				 WHERE tr.object_id IN (" . ams_fast_placeholders( $top_ids ) . ") AND tt.taxonomy = 'category'
-				 ORDER BY t.name ASC",
-				$top_ids
-			)
-		);
-		foreach ( (array) $term_rows as $row ) {
-			$desks[ (int) $row->object_id ][] = (string) $row->name;
-		}
-		foreach ( $top as $i => $row ) {
-			$top[ $i ]['authorName']    = isset( $names[ $row['author'] ] ) ? $names[ $row['author'] ] : '';
-			$top[ $i ]['categoryNames'] = isset( $desks[ $row['id'] ] ) ? $desks[ $row['id'] ] : array();
+	$top      = ams_fast_wpp_attach_names( $top );
+	$trending = ams_fast_wpp_attach_names( $trending );
+	$ms_top   = ams_fast_ms( microtime( true ) - $t0 );
+
+	/* ---- today so far (1.8.0): the current day, compared honestly ----
+	 *
+	 * The one thing the rest of the payload cannot say: how TODAY is going.
+	 * The comparison is today-since-midnight vs YESTERDAY UP TO THE SAME
+	 * CLOCK TIME — a partial day against a full one reads as a crash at 9am,
+	 * which is exactly the trap this shape avoids. Bounds are site-clock
+	 * datetimes computed in PHP like every other bound here. Memoised for
+	 * 120 SECONDS, not the 5-minute reference TTL: this is the only cell on
+	 * the screen that claims to be live. `postsToday` stays outside the memo —
+	 * it is scope-aware and read-your-writes matters right after publishing. */
+
+	$t0          = microtime( true );
+	$today_start = $today->format( 'Y-m-d 00:00:00' );
+	$yesterday   = $today->modify( '-1 day' );
+
+	$today_views = null;
+	$y_views     = null;
+	$top_hour    = null;
+	if ( $has_summary ) {
+		$cached = ams_fast_cache_get( 'wpp:today:v1', $hit );
+		if ( $hit && is_array( $cached ) && 3 === count( $cached ) ) {
+			list( $today_views, $y_views, $top_hour ) = $cached;
+		} else {
+			$today_views = (int) $wpdb->get_var(
+				$wpdb->prepare( "SELECT COALESCE(SUM(pageviews),0) FROM $summary_table WHERE view_datetime >= %s", $today_start )
+			);
+			$y_views = (int) $wpdb->get_var(
+				$wpdb->prepare(
+					"SELECT COALESCE(SUM(pageviews),0) FROM $summary_table WHERE view_datetime >= %s AND view_datetime < %s",
+					$yesterday->format( 'Y-m-d 00:00:00' ),
+					$yesterday->format( 'Y-m-d H:i:s' )
+				)
+			);
+			$hour_rows = ams_fast_wpp_ranked( $summary_table, $today->modify( '-1 hour' )->format( 'Y-m-d H:i:s' ), 1 );
+			$top_hour  = $hour_rows ? $hour_rows[0] : null;
+			ams_fast_cache_set( 'wpp:today:v1', array( $today_views, $y_views, $top_hour ), 120 );
 		}
 	}
-	$ms_top = ams_fast_ms( microtime( true ) - $t0 );
+	if ( $top_hour ) {
+		$named    = ams_fast_wpp_attach_names( array( $top_hour ) );
+		$top_hour = $named[0];
+	}
+
+	$sql         = "SELECT COUNT(*) FROM $T_POSTS
+		 WHERE post_type = 'post' AND post_status = 'publish' AND post_date >= %s$own_sql";
+	$posts_today = (int) $wpdb->get_var( $wpdb->prepare( $sql, array_merge( array( $today_start ), $own_params ) ) );
+	$ms_today    = ams_fast_ms( microtime( true ) - $t0 );
 
 	/* ---- recent activity: the whole edit stream, posts AND programs ----
 	 *
@@ -1335,21 +1438,114 @@ function ams_fast_res_dashboard( array $user, array $caps ) {
 			'data'     => array(
 				'scope'     => $scope,
 				'range'     => $days,
+				'custom'    => $custom ? array( 'from' => $c_from, 'to' => $c_to ) : null,
 				'hasViews'  => $has_views,
 				'kpi'       => $kpi,
 				'series'    => $series,
 				'queue'     => $queue,
 				'authors'   => $authors,
 				'top'       => $top,
+				'trending'  => $trending,
+				'today'     => array(
+					'views'             => $today_views,
+					'viewsPrevSameTime' => $y_views,
+					'posts'             => $posts_today,
+					'topHour'           => $top_hour,
+				),
 				'recent'    => $recent,
 			),
 			'ms'       => array(
 				'boot'   => $AMS_FAST_BOOT_MS,
 				'rows'   => $ms_queue + $ms_recent,
-				'extras' => $ms_series + $ms_authors + $ms_top,
+				'extras' => $ms_series + $ms_authors + $ms_top + $ms_today,
 			),
 		)
 	);
+}
+
+/**
+ * The WPP ranking `top` and `trending` share (1.7.0): pageviews summed over
+ * the window, PUBLISHED posts only — the INNER JOIN is what excludes
+ * unpublished rows, and it is why this is shaped differently from the daily
+ * `series` scan (see the resource header before "fixing" that asymmetry).
+ * Rows come back bare (id/title/views/author/date); names are attached after
+ * the memo by ams_fast_wpp_attach_names(). `$until` (exclusive) bounds a
+ * custom window; null means "up to now", the preset shape.
+ */
+function ams_fast_wpp_ranked( $summary_table, $since, $limit, $until = null ) {
+	global $wpdb, $T_POSTS;
+
+	$until_sql = null !== $until ? ' AND s.view_datetime < %s' : '';
+	$params    = null !== $until ? array( $since, $until, (int) $limit ) : array( $since, (int) $limit );
+
+	$rows = $wpdb->get_results(
+		$wpdb->prepare(
+			"SELECT s.postid, SUM(s.pageviews) views, p.post_title, p.post_author, p.post_date
+			 FROM $summary_table s
+			 INNER JOIN $T_POSTS p ON p.ID = s.postid
+			 WHERE p.post_type = 'post' AND p.post_status = 'publish'
+			   AND s.view_datetime >= %s$until_sql
+			 GROUP BY s.postid, p.post_title, p.post_author, p.post_date
+			 ORDER BY views DESC
+			 LIMIT %d",
+			$params
+		)
+	);
+
+	$ranked = array();
+	foreach ( (array) $rows as $row ) {
+		$ranked[] = array(
+			'id'     => (int) $row->postid,
+			'title'  => (string) $row->post_title,
+			'views'  => (int) $row->views,
+			'author' => (int) $row->post_author,
+			'date'   => str_replace( ' ', 'T', (string) $row->post_date ),
+		);
+	}
+	return $ranked;
+}
+
+/**
+ * Resolve author display names and desk (category) names onto ranking rows.
+ * Null and empty pass through untouched: null means "no summary table", and
+ * the frontend keys its WPP-REST fallback on exactly that — turning it into
+ * an empty array here would silently disable the fallback.
+ */
+function ams_fast_wpp_attach_names( $ranked ) {
+	global $wpdb, $T_TERMS, $T_TERMTAX, $T_TERMREL;
+
+	if ( ! is_array( $ranked ) || ! $ranked ) {
+		return $ranked;
+	}
+
+	$post_ids   = array();
+	$author_ids = array();
+	foreach ( $ranked as $row ) {
+		$post_ids[]   = (int) $row['id'];
+		$author_ids[] = (int) $row['author'];
+	}
+	$names     = ams_fast_author_names( ams_fast_id_list( $author_ids ) );
+	$desks     = array();
+	$post_ids  = ams_fast_id_list( $post_ids );
+	$term_rows = $wpdb->get_results(
+		$wpdb->prepare(
+			"SELECT tr.object_id, t.name
+			 FROM $T_TERMREL tr
+			 INNER JOIN $T_TERMTAX tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
+			 INNER JOIN $T_TERMS t ON t.term_id = tt.term_id
+			 WHERE tr.object_id IN (" . ams_fast_placeholders( $post_ids ) . ") AND tt.taxonomy = 'category'
+			 ORDER BY t.name ASC",
+			$post_ids
+		)
+	);
+	foreach ( (array) $term_rows as $row ) {
+		$desks[ (int) $row->object_id ][] = (string) $row->name;
+	}
+	foreach ( $ranked as $i => $row ) {
+		$ranked[ $i ]['authorName']    = isset( $names[ $row['author'] ] ) ? $names[ $row['author'] ] : '';
+		$ranked[ $i ]['categoryNames'] = isset( $desks[ $row['id'] ] ) ? $desks[ $row['id'] ] : array();
+	}
+	return $ranked;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1362,6 +1558,49 @@ function ams_fast_res_dashboard( array $user, array $caps ) {
 function ams_fast_clamp_days( $raw ) {
 	$raw = (int) $raw;
 	return in_array( $raw, array( 7, 30, 90 ), true ) ? $raw : 30;
+}
+
+/** Parse and clamp a custom ?from/?to pair (site-local Y-m-d, INCLUSIVE).
+ *  Rules: both must be real dates; `to` is capped at today; the span is capped
+ *  at 90 days by moving `from` forward (the same 57-second measurement that
+ *  clamps the presets); from > to is unusable. Returns array(from, to) as
+ *  Y-m-d strings, or array(null, null) when the pair is absent or unusable —
+ *  the caller then falls back to the ?days preset. */
+function ams_fast_custom_range( $from, $to, DateTimeImmutable $today ) {
+	foreach ( array( $from, $to ) as $d ) {
+		if ( ! is_string( $d ) || ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $d ) ) {
+			return array( null, null );
+		}
+	}
+	$tz = $today->getTimezone();
+	$f  = DateTimeImmutable::createFromFormat( '!Y-m-d', $from, $tz );
+	$t  = DateTimeImmutable::createFromFormat( '!Y-m-d', $to, $tz );
+	// createFromFormat "repairs" impossible dates (Feb 31 -> Mar 3); the
+	// round-trip check refuses them instead of silently querying a window the
+	// user never asked for.
+	if ( ! $f || ! $t || $f->format( 'Y-m-d' ) !== $from || $t->format( 'Y-m-d' ) !== $to ) {
+		return array( null, null );
+	}
+	$today_midnight = DateTimeImmutable::createFromFormat( '!Y-m-d', $today->format( 'Y-m-d' ), $tz );
+	if ( $t > $today_midnight ) {
+		$t = $today_midnight;
+	}
+	if ( $f > $t ) {
+		return array( null, null );
+	}
+	$floor = $t->modify( '-89 days' );
+	if ( $f < $floor ) {
+		$f = $floor;
+	}
+	return array( $f->format( 'Y-m-d' ), $t->format( 'Y-m-d' ) );
+}
+
+/** Inclusive day count of a Y-m-d..Y-m-d window: 01..03 is 3 days. */
+function ams_fast_span_days( $from, $to ) {
+	$utc = new DateTimeZone( 'UTC' );
+	$f   = new DateTimeImmutable( $from . ' 00:00:00', $utc );
+	$t   = new DateTimeImmutable( $to . ' 00:00:00', $utc );
+	return (int) $f->diff( $t )->days + 1;
 }
 
 /** "+07:00" for 7, "-03:30" for -3.5 — the DateTimeZone-parsable spelling of
@@ -1921,8 +2160,11 @@ function ams_fast_res_programs( array $user, array $caps, array $roles ) {
 			$local_base = ams_fast_local_uploads_base();
 			foreach ( $by_post as $post_id => $att_id ) {
 				if ( isset( $att_meta[ $att_id ] ) ) {
-					// The Programs grid renders the MEDIUM size, not the thumbnail.
-					$posters[ $post_id ] = ams_fast_attachment_url( $att_meta[ $att_id ], $local_base, $how, array( 'medium' ) );
+					// The Programs grid renders LARGE-first (1.8.1): the card is
+					// wider than medium's 300px on any hi-DPI screen, so medium
+					// upscaled was visibly soft. Chain falls to medium, then to
+					// the full-size file, as ams_fast_attachment_url always has.
+					$posters[ $post_id ] = ams_fast_attachment_url( $att_meta[ $att_id ], $local_base, $how, array( 'large', 'medium' ) );
 				}
 			}
 		}
@@ -2064,10 +2306,13 @@ function ams_fast_res_profile( array $user, array $roles ) {
 		ams_fast_fail( 401, 'unknown_user' );
 	}
 
+	// ams_avatar_* are written by ams-frontend-api's `ams_avatar` REST field
+	// (1.20.0) — the URL is resolved and stored at write time precisely so this
+	// SHORTINIT read needs no attachment/offload machinery.
 	$meta_rows = $wpdb->get_results(
 		$wpdb->prepare(
 			"SELECT meta_key, meta_value FROM $T_USERMETA
-			 WHERE user_id = %d AND meta_key IN ('first_name','last_name','description')",
+			 WHERE user_id = %d AND meta_key IN ('first_name','last_name','description','ams_avatar_id','ams_avatar_url')",
 			$uid
 		)
 	);
@@ -2092,6 +2337,11 @@ function ams_fast_res_profile( array $user, array $roles ) {
 				'url'         => (string) $row->user_url,
 				'slug'        => (string) $row->user_nicename,
 				'roles'       => $roles,
+				// Same field name and shape as the REST read, so the frontend
+				// maps both paths with one function.
+				'ams_avatar'  => ( ! empty( $meta['ams_avatar_id'] ) && ! empty( $meta['ams_avatar_url'] ) )
+					? array( 'id' => (int) $meta['ams_avatar_id'], 'url' => (string) $meta['ams_avatar_url'] )
+					: null,
 			),
 			'ms'       => array( 'boot' => $AMS_FAST_BOOT_MS, 'rows' => ams_fast_ms( microtime( true ) - $t0 ) ),
 		)
@@ -3220,7 +3470,7 @@ function ams_fast_res_pub_programs() {
 /* ===========================================================================
  * RESOURCE: pub-menu — a nav menu's items, for the public site's own menus
  * ---------------------------------------------------------------------------
- * The public site renders WordPress's "Secondary Nav V3 Menu" as its
+ * The public site renders WordPress's "AMS Infotainment Third Menu" as its
  * program-icon strip. Core REST CANNOT serve it: /wp/v2/menus and
  * /wp/v2/menu-items both answer 401 rest_cannot_view to anonymous callers
  * (measured 2026-08-05), because menus are an edit_theme_options surface in
@@ -3265,7 +3515,6 @@ function ams_fast_public_menus() {
 		// Economy's current program-icon strip (មាតិកាឌីជីថល).
 		'secondary-nav-v3-menu',
 		// The program-icon strip under the main nav (មាតិកាឌីជីថល).
-		// Retained for compatibility with the Infotainment installation.
 		'ams-infotainment-third-menu',
 		// Registered for the same strip on mobile + the secondary row.
 		'ams-infotainment-mobile',
