@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { css } from "@/styled-system/css";
+import { createPortal } from "react-dom";
+import { css, cx } from "@/styled-system/css";
 import { ac } from "./tokens";
+import { ADMIN_FONT_STACK, adminFont } from "./font";
 import { Icon } from "./icons";
 import { browseMedia } from "@/lib/admin/editor-actions";
 import { uploadImageFile } from "./upload-client";
@@ -137,15 +139,28 @@ export default function MediaPicker({
   const toggle = (m: PickedMedia) =>
     setPicked((prev) => (prev.some((p) => p.id === m.id) ? prev.filter((p) => p.id !== m.id) : [...prev, m]));
 
-  return (
+  // A PORTAL into <body>, for the same reason Dropdown's menu is one: this
+  // dialog is mounted WHEREVER its opener lives, and one of those openers is
+  // the media-upload bridge, which renders it INSIDE the Gutenberg image block
+  // — deep in a block list whose selected-block wrappers are their own little
+  // stacking contexts. Trapped in there, z-index 1000050 is compared inside a
+  // layer worth ~20, and the block's contextual toolbar (a WordPress popover,
+  // portal'd to <body> at 1000000+) painted straight across the dialog.
+  // Nothing drawn OVER the page can be laid out INSIDE it.
+  //
+  // Escaping the admin shell also escapes the div that declares --font-admin,
+  // so the variable is re-declared here and the stack named explicitly — the
+  // same fix the Dropdown menu needed, and why the modal does not fall back to
+  // Battambang for its Latin UI text.
+  const overlay = (
     <div
       // z-index has to clear the ARTICLE EDITOR'S BAND, which sits at 1000001
       // because it in turn has to beat WordPress's own popover layer (1000000).
       // At the old value of 100 this modal opened UNDERNEATH that band: the
       // search box, the type filters and the Upload button were all covered by
       // a strip of editor toolbar. A modal outranks a sticky toolbar — always.
-      className={css({ position: "fixed", inset: 0, zIndex: 1000050, display: "flex", alignItems: "center", justifyContent: "center", padding: "32px" })}
-      style={{ background: ac.overlay }}
+      className={cx(adminFont.variable, css({ position: "fixed", inset: 0, zIndex: 1000050, display: "flex", alignItems: "center", justifyContent: "center", padding: "32px" }))}
+      style={{ background: ac.overlay, fontFamily: ADMIN_FONT_STACK }}
       onClick={onClose}
     >
       <div
@@ -337,6 +352,8 @@ export default function MediaPicker({
       </div>
     </div>
   );
+
+  return typeof document !== "undefined" ? createPortal(overlay, document.body) : overlay;
 }
 
 function PagerBtn({ label, disabled, onClick }: { label: string; disabled: boolean; onClick: () => void }) {

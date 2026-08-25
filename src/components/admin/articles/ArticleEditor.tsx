@@ -19,6 +19,15 @@ import LegacySiteChip, { startLegacyRefresh } from "../LegacySiteChip";
 import YoastMetabox from "../seo/YoastMetabox";
 import { type BodyEditorHandle } from "./BodyEditor";
 import EditorSkeleton from "./EditorSkeleton";
+import {
+  agoLabel,
+  clearDraft,
+  draftKey,
+  pruneDrafts,
+  readDraft,
+  writeDraft,
+  type DraftData,
+} from "@/lib/admin/editor-draft";
 
 // The real Gutenberg canvas — @wordpress/block-editor touches `document` at
 // module scope and is far too heavy for the server bundle, so it loads
@@ -108,13 +117,6 @@ const STATUS_OPTIONS: { value: Status; title: string; desc: string }[] = [
   { value: "Published", title: "Published", desc: "Visible to everyone." },
 ];
 
-// Escape plain text for one-time injection into a contentEditable via
-// dangerouslySetInnerHTML (init only; React skips the DOM when __html is stable,
-// so user edits are preserved across re-renders). Read back with innerText.
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
 /** Which sidebar sections are folded open. Publish is not among them — it has
  *  no header and never collapses, because status is the one thing you look at
  *  on every single visit. */
@@ -132,8 +134,41 @@ export default function ArticleEditor({
   const router = useRouter();
   const isCreate = mode === "create";
 
-  // Uncontrolled canvas field — initialised once via dangerouslySetInnerHTML.
+  const backupKey = draftKey(isCreate ? null : post?.id ?? null);
+  const [pendingBackup, setPendingBackup] = useState<{ at: number } | null>(null);
+  const baselineRef = useRef<string | null>(null);
+  const lastBackupRef = useRef<string | null>(null);
+  const guardRef = useRef<{
+    snapshotData: () => DraftData | null;
+    flushBackup: () => boolean;
+    isEditorDirty: () => boolean;
+  } | null>(null);
+
+  // Uncontrolled canvas field — seeded once through the ref callback. React
+  // then manages no children here, so a parent re-render cannot wipe typing.
   const titleRef = useRef<HTMLDivElement | null>(null);
+  const titleSeededRef = useRef(false);
+  const titleTextRef = useRef("");
+  const attachTitle = useCallback(
+    (el: HTMLDivElement | null) => {
+      titleRef.current = el;
+      if (!el) return;
+      if (!titleSeededRef.current) {
+        titleSeededRef.current = true;
+        el.innerText = post?.title ?? "";
+      }
+      titleTextRef.current = el.innerText;
+      const onInput = () => {
+        titleTextRef.current = el.innerText;
+      };
+      el.addEventListener("input", onInput);
+      return () => {
+        el.removeEventListener("input", onInput);
+        titleRef.current = null;
+      };
+    },
+    [post],
+  );
 
   // The body editor registers a handle here once mounted; save() consults it
   // for dirty state + HTML. Stable identity so BodyEditor's effect runs once.
@@ -144,9 +179,23 @@ export default function ArticleEditor({
    *  it cannot claim "Loaded" over a page that is still coming up. */
   const [editorReady, setEditorReady] = useState(false);
   const registerBody = useCallback((h: BodyEditorHandle | null) => {
+    if (h === null && bodyRef.current) guardRef.current?.flushBackup();
     bodyRef.current = h;
     setEditorReady(h !== null);
-  }, []);
+    if (h) {
+      setTimeout(() => {
+        const data = guardRef.current?.snapshotData();
+        if (!data) return;
+        baselineRef.current ??= JSON.stringify(data);
+        const existing = readDraft(backupKey);
+        if (existing) {
+          if (JSON.stringify(existing.data) === baselineRef.current) clearDraft(backupKey);
+          else setPendingBackup({ at: existing.at });
+        }
+        pruneDrafts();
+      }, 0);
+    }
+  }, [backupKey]);
 
   // Publish. TWO statuses on purpose: `pubStatus` is what the Status panel has
   // SELECTED (the intent) and `savedStatus` is what WordPress currently holds
@@ -232,6 +281,123 @@ export default function ArticleEditor({
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 6000);
   };
+
+  const snapshotData = (): DraftData | null => {
+    const body = bodyRef.current;
+    if (!body) return null;
+    return {
+      title: (titleRef.current ? titleRef.current.innerText : titleTextRef.current).trim(),
+      body: body.getHtml(),
+      status: pubStatus,
+      password,
+      sticky,
+      categories: Object.keys(checked).filter((key) => checked[Number(key)]).map(Number).sort((a, b) => a - b),
+      tags,
+      featuredId,
+      featuredThumb,
+      excerpt,
+      slug,
+      seo: { title: seoTitle, description: metaDesc, focus: focusKw },
+    };
+  };
+
+  const isEditorDirty = (): boolean => {
+    if (baselineRef.current === null) return false;
+    const data = snapshotData();
+    return data !== null && JSON.stringify(data) !== baselineRef.current;
+  };
+
+  const flushBackup = (): boolean => {
+    if (pendingBackup || baselineRef.current === null) return false;
+    const data = snapshotData();
+    if (!data) return false;
+    const snapshot = JSON.stringify(data);
+    if (snapshot === baselineRef.current) {
+      if (lastBackupRef.current !== null) {
+        clearDraft(backupKey);
+        lastBackupRef.current = null;
+      }
+      return false;
+    }
+    if (snapshot !== lastBackupRef.current) {
+      writeDraft(backupKey, data);
+      lastBackupRef.current = snapshot;
+    }
+    return true;
+  };
+
+  const restoreBackup = () => {
+    const draft = readDraft(backupKey);
+    setPendingBackup(null);
+    if (!draft) return;
+    if (titleRef.current) titleRef.current.innerText = draft.data.title;
+    titleTextRef.current = draft.data.title;
+    const body = bodyRef.current;
+    if (body && draft.data.body !== body.getHtml()) body.setHtml(draft.data.body);
+    setPubStatus(STATUS_OPTIONS.some((option) => option.value === draft.data.status) ? draft.data.status as Status : "Draft");
+    setPassword(draft.data.password);
+    setPwOpen(draft.data.password.trim().length > 0);
+    setSticky(draft.data.sticky);
+    setChecked(Object.fromEntries(draft.data.categories.map((id) => [id, true])));
+    setTags(draft.data.tags);
+    setFeaturedId(draft.data.featuredId);
+    setFeaturedThumb(draft.data.featuredThumb);
+    setExcerpt(draft.data.excerpt);
+    if (!everPublished) setSlug(draft.data.slug);
+    setSeoTitle(draft.data.seo.title);
+    setMetaDesc(draft.data.seo.description);
+    setFocusKw(draft.data.seo.focus);
+    lastBackupRef.current = JSON.stringify(draft.data);
+    setSaveMsg({ kind: "ok", text: "Backup restored — not saved to WordPress yet" });
+  };
+
+  const discardBackup = () => {
+    clearDraft(backupKey);
+    lastBackupRef.current = null;
+    setPendingBackup(null);
+  };
+
+  useEffect(() => {
+    guardRef.current = { snapshotData, flushBackup, isEditorDirty };
+  });
+
+  useEffect(() => {
+    const heartbeat = setInterval(() => guardRef.current?.flushBackup(), 5000);
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      const guard = guardRef.current;
+      if (!guard) return;
+      guard.flushBackup();
+      if (!guard.isEditorDirty()) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const onPageHide = () => guardRef.current?.flushBackup();
+    const onClickCapture = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const anchor = (event.target as HTMLElement | null)?.closest?.("a[href]");
+      if (!anchor || anchor.getAttribute("target") === "_blank" || anchor.hasAttribute("download")) return;
+      if ((anchor.getAttribute("href") ?? "").startsWith("#")) return;
+      const guard = guardRef.current;
+      if (!guard || !guard.isEditorDirty()) return;
+      const backedUp = guard.flushBackup();
+      const message = backedUp
+        ? "This article has unsaved changes. A backup was kept on this device. Leave anyway?"
+        : "This article has unsaved changes that could be lost. Leave anyway?";
+      if (!window.confirm(message)) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    window.addEventListener("pagehide", onPageHide);
+    document.addEventListener("click", onClickCapture, true);
+    return () => {
+      clearInterval(heartbeat);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.removeEventListener("pagehide", onPageHide);
+      document.removeEventListener("click", onClickCapture, true);
+    };
+  }, []);
 
   const selectedCount = Object.values(checked).filter(Boolean).length;
   /** The checked categories, in the tree's own order — shown under the title. */
@@ -381,6 +547,17 @@ export default function ArticleEditor({
       setSaveMsg({ kind: "err", text: res.error ?? "Save failed." });
       return false;
     }
+    // Everything in the recovery snapshot has reached WordPress. Disarm
+    // writes before navigation, clear the stored backup, then recapture the
+    // committed editor state after React applies the save response.
+    clearDraft(backupKey);
+    lastBackupRef.current = null;
+    baselineRef.current = null;
+    setPendingBackup(null);
+    setTimeout(() => {
+      const data = guardRef.current?.snapshotData();
+      if (data) baselineRef.current = JSON.stringify(data);
+    }, 0);
     // WordPress echoes the status it actually stored — trust that over the
     // intent, and move BOTH values onto it so the pill and the panel agree.
     const stored = res.status ? fromWpStatus(res.status) : pubStatus;
@@ -762,6 +939,24 @@ export default function ArticleEditor({
         </div>
       ) : null}
 
+      {pendingBackup && editorReady ? (
+        <div
+          role="status"
+          className={css({ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "10px 12px", padding: "10px 20px", fontSize: "13px", lineHeight: 1.5 })}
+          style={{ background: ac.surface, borderBottom: `1px solid ${ac.border}`, borderLeft: `3px solid ${ac.warn}`, color: ac.text }}
+        >
+          <Icon name="clock" size={15} strokeWidth={1.9} style={{ color: ac.warn, flex: "none" }} />
+          <span>
+            Unsaved changes from <strong style={{ fontWeight: 600 }}>{agoLabel(pendingBackup.at)}</strong> were
+            backed up on this device and never reached WordPress.
+          </span>
+          <div className={css({ display: "flex", gap: "8px", marginLeft: "auto", flex: "none" })}>
+            <Button size="sm" variant="primary" onClick={restoreBackup}>Restore backup</Button>
+            <Button size="sm" variant="ghost" onClick={discardBackup}>Discard</Button>
+          </div>
+        </div>
+      ) : null}
+
       {/* Going Published -> anything else. Rendered here with the other
           overlays, not in the sidebar that set the status. */}
       {confirmOffline ? (
@@ -828,13 +1023,12 @@ export default function ArticleEditor({
         }
         header={
           <>
-            {/* Title (editable) — init once via dangerouslySetInnerHTML, read on save */}
+            {/* Title (editable) — seeded once by the ref callback, read on save. */}
             <div
-              ref={titleRef}
+              ref={attachTitle}
               contentEditable
               suppressContentEditableWarning
               data-placeholder="Article title"
-              dangerouslySetInnerHTML={{ __html: escapeHtml(post?.title ?? "") }}
               // Focus fill is SUNKEN, not `surface`: the title sits on the
               // document sheet, which is #FFFFFF in light mode — so a white
               // fill was a no-op there and the focus state lost half its

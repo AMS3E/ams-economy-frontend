@@ -51,17 +51,65 @@ hex can never respond to a theme. A `var()` can.
 
 ### The palette
 
-Cool slate neutrals (replacing the old warm stone — the single biggest reason
-the tool now reads "product dashboard"), AMS red for actions only, teal as
-categorical slot 1.
+**True-neutral greys**, with teal as the single accent and as categorical slot 1.
 
 | role | light | dark |
 |---|---|---|
-| canvas / surface / sunken | `#F6F7F9` / `#FFFFFF` / `#F0F2F5` | `#0B0F17` / `#131926` / `#0F1520` |
-| text / sub / muted / faint | `#0F172A` / `#475569` / `#5B6A7D` / `#7D8CA1` | `#E9EEF6` / `#B3C0D1` / `#8B99AC` / `#6B7C93` |
-| accent (fill) / accent-text | `#C8102E` / `#C8102E` | `#D91E3B` / `#FF8095` |
+| canvas / surface / hover / sunken | `#F7F7F8` / `#FFFFFF` / `#F3F3F5` / `#EEEEF0` | `#0C0C0E` / `#151518` / `#1E1E22` / `#09090B` |
+| rowLine / border / borderStrong | `#EEEEF0` / `#E3E3E6` / `#C7C7CC` | `#252528` / `#2C2C30` / `#46464C` |
+| text / sub / muted / faint | `#18181B` / `#52525B` / `#6B6B75` / `#888892` | `#F4F4F5` / `#C0C0C6` / `#96969E` / `#75757D` |
+| accent (fill) / accent-hover | `#0E7C7B` / `#0A6160` | `#17A8A4` / `#22C3BE` |
+| accent-fg (label on the fill) | `#FFFFFF` | `#0B0A0C` |
+| accent-text (clickable text) / focus | `#0B6664` | `#5EEAD4` |
+| accent-tint (selection) | `rgba(14,124,123,.08)` | `rgba(23,168,164,.16)` |
 | good / warn / danger | `#15803D` / `#B45309` / `#B42318` | `#4ADE80` / `#FBBF24` / `#FF7B72` |
-| data (cat 1) → cat 4 | `#0D9488` `#2563EB` `#D97706` `#A21CAF` | `#12A899` `#2563EB` `#D97706` `#AE2ABE` |
+| data (cat 1) → cat 4 | `#0E7C7B` `#2563EB` `#D97706` `#A21CAF` | `#2FB8B2` `#2563EB` `#D97706` `#AE2ABE` |
+
+#### Why neutral, and why teal
+
+**Do not re-tint the neutrals.** They have been cool slate and they have been warm
+cream, and both were wrong for the same underlying reason: a tinted grey takes a
+position relative to the logo, and the AMS mark spans violet (`#59174D`) through
+crimson to gold (`#DE9838`). Any cast either fights part of that range — cool
+slate against the warm end — or muddies against it, which is how the cream ramp
+ended up reading as beige. A true neutral (saturation ~0.06, as close to grey as
+hex gets) takes no position at all. Under a multi-hue mark the logo supplies the
+colour and the shell supplies the quiet.
+
+The accent is teal because it is the **complement** of that violet-to-gold run. It
+is the one strong hue that can never be mistaken for brand chrome, and it stays
+clear of `warn` (amber) and `danger` (red), so an action never reads as a warning.
+It replaced, in order: AMS red (collided with `danger`), Strapi violet, and a
+split of neutral fills with violet ink. That split existed only because a
+*neutral* accent renders link text at 1.00:1 against body text — identical,
+undiscoverable, a WCAG 1.4.1 failure. A coloured accent doesn't have that problem,
+so the palette collapses back to one hue.
+
+**`data` deliberately shares the accent's family.** One cool hue for the whole
+tool beats an accent and an unrelated chart colour arguing. It is a step deeper
+and less green than the old `#0D9488`: on cool slate that read as a minty wash,
+which was most of why the charts felt generic — the hue was never really the
+problem, a cool mint on a cool grey ground was. Warm hues were considered for
+charts and rejected: amber already means `warn`, red already means `danger`, so a
+chart in the brand's own orange stops being readable as data.
+
+#### Three traps
+
+- **`accent-fg` is theme-aware** — white on light, near-black on dark. Hardcoding
+  white puts an invisible label on the brighter dark fill. This has bitten once
+  already: 13 hand-rolled buttons across 8 files had `color: "#fff"` baked in.
+  Use `ui.tsx`'s `Button`, or the token.
+- **`accent-text` is a deeper step than `accent`**, not the same value. `#0E7C7B`
+  as *text* drops to 4.35:1 on `surfaceSunken` and misses AA; the fill doesn't
+  care, because it is measured against the white on top of it, not against the
+  page.
+- **Do not take ink colours from a brand palette.** The AMS brand set proposed
+  its "sand taupe" (`#C9B8A8`) for secondary text; that measures **1.76:1**,
+  nowhere near readable. Brand palettes are picked for posters, where nothing has
+  to hold 4.5:1 at 12px. Every ink step above is derived and measured against all
+  four surfaces, which is also how `faint` landed on `#888892` — anything lighter
+  fell to 2.91 on `surfaceSunken` and stopped clearing the 3:1 that chart axis
+  labels need.
 
 ### What was validated, and how
 
@@ -210,6 +258,18 @@ Rules that fell out of rolling this across nine screens:
 **The form screen** — `PageHeader` → a column of `FormCard`s → one `SaveBar` at
 the bottom. Fields are `Field` + `Input`/`Textarea`; side-by-side pairs are
 `FormGrid`. Reference: `SettingsForm.tsx` and `ProfileForm.tsx`.
+
+⚠ **A menu drawn OVER a panel cannot be laid out INSIDE it.** `Surface` is
+`overflow: hidden`, so an absolutely-positioned popover in a toolbar gets
+sliced at the panel's edge — that is what cut the Articles Category/Author
+filters in half. `Dropdown` therefore portals its menu into `document.body` as
+`position: fixed`, measures the trigger in the CLICK handler (never an effect —
+§React-compiler lint), flips above when down is cramped, caps its height at
+420px with internal scroll, and anchors to whichever horizontal edge lets it
+grow inwards. Overlay z-index ladder: dropdown menu 1000010/11 > Gutenberg
+popovers 1000001 > drawers 1000 > ConfirmDialog 120 > screen modals 100; the
+media dialog (1000050) and the editor toast (1000060) stay on top of all of it.
+Copy this anatomy for any new popover.
 
 **`<select>` stays native.** `Dropdown` is a filter control that pops a menu out
 of the flow; inside a form the browser's own picker is better at long

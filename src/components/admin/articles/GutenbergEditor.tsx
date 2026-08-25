@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { parse, serialize, type Block } from "@wordpress/blocks";
 import { registerCoreBlocks } from "@wordpress/block-library";
+import { applyMediaSpacers, newDocumentBlocks } from "./spacers";
 import {
   BlockEditorProvider,
   BlockInspector,
@@ -15,7 +16,25 @@ import {
   // the six-block quick list.
   __experimentalLibrary as InserterLibrary,
 } from "@wordpress/block-editor";
+import * as blockEditorPkg from "@wordpress/block-editor";
 import { SlotFillProvider, Popover } from "@wordpress/components";
+
+// The "Type / to choose a block" row. BlockList's own root appender only
+// renders for an EMPTY document — in wp-admin it is the EDITOR package that
+// passes this in as renderAppender, which a bare BlockEditorProvider setup has
+// to do for itself. Without it, a document whose last block is media (or its
+// trailing spacer) simply ends: no affordance to keep writing below it.
+//
+// Cast, twice, because the package's .d.ts is behind its runtime (the same
+// boundary problem the media bridge documents): DefaultBlockAppender IS
+// exported (verified against build/components/index.cjs) but absent from the
+// types, and BlockList's typing knows only className even though renderAppender
+// is the documented prop wp-admin itself passes.
+const DefaultBlockAppender = (blockEditorPkg as unknown as { DefaultBlockAppender: React.ComponentType }).DefaultBlockAppender;
+const AppendableBlockList = BlockList as unknown as React.ComponentType<{
+  className?: string;
+  renderAppender?: React.ComponentType | false;
+}>;
 import { useDispatch } from "@wordpress/data";
 import { ShortcutProvider } from "@wordpress/keyboard-shortcuts";
 // Side-effect import: this is what registers the core text formats (bold,
@@ -116,6 +135,10 @@ const ALLOWED_BLOCKS = [
 // once per page load — twice and every block logs a duplicate-registration
 // warning and the second registration wins.
 let blocksRegistered = false;
+
+/** Undo-stack depth. Module scope, not component scope: the registered handle's
+ *  setHtml pushes history too, and the handle effect must not grow deps. */
+const HISTORY_LIMIT = 50;
 /**
  * Clicking the canvas OUTSIDE any block clears the selection — which is what
  * makes the floating block toolbar go away. Without it the toolbar stays up
@@ -214,7 +237,13 @@ export default function GutenbergEditor({
 }) {
   ensureBlocks();
 
-  const [blocks, setBlocks] = useState<Block[]>(() => (initialContent ? parse(initialContent) : []));
+  /** A NEW article opens on the newsroom's 10px opener plus an empty paragraph
+   *  (see spacers.ts — 25 of 25 live articles start that way). An EXISTING one
+   *  is parsed exactly as stored and never seeded: opening an old article must
+   *  not change a byte of it, which is also why nothing here marks it dirty. */
+  const [blocks, setBlocks] = useState<Block[]>(() =>
+    initialContent ? parse(initialContent) : newDocumentBlocks(),
+  );
   // ONE docked column, two tabs — wp-admin's anatomy, so the editors already
   // know where things are. Open by default: the point of folding the old
   // Settings screen in here was that a writer can SEE the status and the
@@ -240,7 +269,6 @@ export default function GutenbergEditor({
   const historyRef = useRef<{ past: Block[][]; future: Block[][] }>({ past: [], future: [] });
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
-  const HISTORY_LIMIT = 50;
 
   const commit = (next: Block[], previous: Block[]) => {
     const h = historyRef.current;
@@ -274,6 +302,15 @@ export default function GutenbergEditor({
     dirtyRef.current = true;
     setBlocks(next);
   };
+  /** Whether the document already ends on an empty paragraph — the one case
+   *  where the appender row must NOT also render (see renderAppender below).
+   *  `content` is a RichTextData in this Gutenberg version; String() covers it
+   *  and the plain-string form older serializations produce. */
+  const lastBlock = blocks[blocks.length - 1];
+  const lastIsEmptyParagraph =
+    lastBlock?.name === "core/paragraph" &&
+    String((lastBlock.attributes as { content?: unknown })?.content ?? "").length === 0;
+
   // Serialization is the save payload, so it must read the LATEST blocks —
   // register() runs once with a stable handle, so it reads through a ref.
   const blocksRef = useRef(blocks);
@@ -322,6 +359,22 @@ export default function GutenbergEditor({
       // would write for the same document.
       getHtml: () => (blocksRef.current.length ? serialize(blocksRef.current) : ""),
       isDirty: () => dirtyRef.current,
+      // The local-backup restore path. One persistent-history step — commit()'s
+      // body inlined (calling commit would put a per-render function in this
+      // effect's deps and re-register the handle every render), reading only
+      // refs and stable setters — so a mistaken restore of the BODY is a
+      // single Undo away. Marks dirty: restored content genuinely differs
+      // from what WordPress holds, and the next save must carry it.
+      setHtml: (html: string) => {
+        const h = historyRef.current;
+        h.past.push(blocksRef.current);
+        if (h.past.length > HISTORY_LIMIT) h.past.shift();
+        h.future = [];
+        setCanUndo(true);
+        setCanRedo(false);
+        dirtyRef.current = true;
+        setBlocks(html ? parse(html) : newDocumentBlocks());
+      },
     };
     register(handle);
     // DEV ONLY: the same handle, reachable from a test harness. It is the only
@@ -351,7 +404,10 @@ export default function GutenbergEditor({
             }}
             // onChange = persistent edits (insert, remove, move, reorder):
             // one undo step each.
-            onChange={(next: Block[]) => commit(next, blocks)}
+            // The spacer convention rides on the SAME commit as the edit that
+            // triggered it, so `previous` is the pre-insert document and one
+            // Cmd+Z takes the image and both of its spacers back together.
+            onChange={(next: Block[]) => commit(applyMediaSpacers(next, blocks), blocks)}
           >
             {/* ONE band, spanning the whole editor above both columns — the
                 anatomy wp-admin uses. It is fixed-height and never wraps: the
@@ -497,7 +553,16 @@ export default function GutenbergEditor({
                         <BlockTools>
                           <WritingFlow>
                             <ObserveTyping>
-                              <BlockList />
+                              <AppendableBlockList
+                                // wp-admin's rule: the appender row shows
+                                // UNLESS the last block is an empty paragraph,
+                                // which already renders the same placeholder —
+                                // both at once would read as two type-here
+                                // rows. `false` (not undefined) is the
+                                // explicit "none": undefined would fall back
+                                // to BlockList's own empty-document logic.
+                                renderAppender={lastIsEmptyParagraph ? false : DefaultBlockAppender}
+                              />
                             </ObserveTyping>
                           </WritingFlow>
                         </BlockTools>

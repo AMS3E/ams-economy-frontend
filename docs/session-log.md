@@ -5,6 +5,21 @@ general one: Session 14 is the public menu, Session 15 the public fast read
 path, Session 20 the public site's article sliders. Entries are chronological,
 not split by area, because most of them touch both.
 
+## SESSION 26 (2026-08-25): reusable Infotainment Admin improvements ported
+
+Compared the Economy Admin with `D:\ASM\ams-infotainment-frontend` and ported
+the frontend-only improvements that do not depend on Infotainment's WordPress
+schema: article title seeding that survives React re-renders, five-second local
+draft recovery plus leave guards, Gutenberg's bottom appender, the measured
+media-spacing behavior, and portal/font fixes for the media picker and shared
+dropdown. Economy branding, API origins, menu slug and SEO labels remain local.
+
+Profile avatars and post-template selection were deliberately not copied:
+those require AMS Frontend API 1.20.0/1.19.0 respectively, while Economy's
+plugin source is 1.9.4, and the template suggestions contain
+Infotainment-specific category IDs. Port the backend contract and re-measure
+Economy's categories before enabling either feature.
+
 ## SESSION 25 (2026-08-24): homepage banner restored
 
 The local homepage hero was blank for two independent reasons.

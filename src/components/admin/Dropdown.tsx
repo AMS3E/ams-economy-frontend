@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { css } from "@/styled-system/css";
+import { css, cx } from "@/styled-system/css";
 import { ac } from "./tokens";
+import { ADMIN_FONT_STACK, adminFont } from "./font";
 import { Icon } from "./icons";
 
 export interface Option {
@@ -83,6 +84,8 @@ export function Dropdown({
   onSelect,
   minWidth = 180,
   align = "left",
+  variant = "control",
+  className,
 }: {
   label: string;
   hasValue?: boolean;
@@ -94,6 +97,16 @@ export function Dropdown({
   onSelect: (value: string) => void;
   minWidth?: number;
   align?: "left" | "right";
+  /** How the TRIGGER draws. "control" is the boxed 36px select every filter
+   *  toolbar uses. "link" is the bare accent-coloured value the article
+   *  editor's summary rows use (Status reads "Draft", not a boxed select) —
+   *  same menu, same portal, same keyboard behaviour, just no chrome, for
+   *  putting a real chooser in a label-left / value-right row. */
+  variant?: "control" | "link";
+  /** Merged onto the trigger's wrapper. The article editor needs `minWidth: 0`
+   *  on it so a long label ellipsises inside the 320px rail instead of widening
+   *  the row — a flex item will not shrink below its content without it. */
+  className?: string;
 }) {
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -139,8 +152,18 @@ export function Dropdown({
           ref={menuRef}
           role="listbox"
           aria-label={label}
-          className={css({ position: "fixed", zIndex: 1000011, padding: "6px", borderRadius: "10px", overflowY: "auto", overscrollBehavior: "contain" })}
+          // THE MENU IS A PORTAL INTO <body>, so it renders OUTSIDE the admin
+          // shell — and the shell is where `--font-admin` is declared
+          // (adminFont.variable sits on that one div). Every menu was therefore
+          // resolving `var(--font-admin)` to nothing and falling through to
+          // `var(--font-battambang)`, which IS in scope because the root layout
+          // puts it on <html>: the option list was being set in a Khmer display
+          // face. Re-declaring the variable here and naming the stack puts the
+          // menu back on Plus Jakarta Sans — without losing the per-glyph Khmer
+          // fallback that article titles in these menus depend on.
+          className={cx(adminFont.variable, css({ position: "fixed", zIndex: 1000011, padding: "6px", borderRadius: "10px", overflowY: "auto", overscrollBehavior: "contain" }))}
           style={{
+            fontFamily: ADMIN_FONT_STACK,
             top: box.top,
             bottom: box.bottom,
             left: box.left,
@@ -176,14 +199,17 @@ export function Dropdown({
     ) : null;
 
   return (
-    <div className={css({ position: "relative" })}>
+    <div className={cx(css({ position: "relative" }), className)}>
       <button
         ref={btnRef}
         type="button"
         onClick={toggle}
         aria-haspopup="listbox"
         aria-expanded={open}
-        className={css({
+        className={
+          variant === "link"
+            ? css({ fontSize: "12.5px", fontWeight: 600, cursor: "pointer", border: "none", background: "transparent", padding: "2px 0", display: "flex", alignItems: "center", gap: "4px", maxWidth: "100%", _hover: { textDecoration: "underline" } })
+            : css({
           height: "36px",
           padding: "0 12px",
           display: "flex",
@@ -195,11 +221,20 @@ export function Dropdown({
           whiteSpace: "nowrap",
           transition: "border-color .12s, background .12s",
           _hover: { borderColor: ac.borderStrong },
-        })}
-        style={{ background: ac.surface, border: `1px solid ${ac.border}`, color: hasValue ? ac.text : ac.muted }}
+        })
+        }
+        style={
+          variant === "link"
+            ? { color: hasValue ? ac.accentText : ac.muted }
+            : { background: ac.surface, border: `1px solid ${ac.border}`, color: hasValue ? ac.text : ac.muted }
+        }
       >
-        {label}
-        <Icon name="chevronDown" size={12} style={{ color: ac.muted }} />
+        {/* The label truncates rather than widening the row: template names run
+            to ~30 characters and the editor rail is 320px. */}
+        <span className={variant === "link" ? css({ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }) : undefined}>
+          {label}
+        </span>
+        <Icon name="chevronDown" size={12} style={{ color: ac.muted, flex: "none" }} />
       </button>
 
       {menu && typeof document !== "undefined" ? createPortal(menu, document.body) : null}
