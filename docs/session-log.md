@@ -5,6 +5,64 @@ general one: Session 14 is the public menu, Session 15 the public fast read
 path, Session 20 the public site's article sliders. Entries are chronological,
 not split by area, because most of them touch both.
 
+## SESSION 33 (2026-08-25): episode-save timeout false failure fixed
+
+Editing a published episode again exceeded the Admin's intentional 120-second
+WordPress deadline and surfaced `TimeoutError: The operation was aborted due to
+timeout`. This is the save equivalent of the already-solved delete behavior:
+WordPress commits the post/meta first, then this host's slow publish/cache hooks
+can keep the REST response open beyond the deadline.
+
+`updateEpisodeAction` now re-reads the uncached editable episode after any
+failed response and compares all seven writable values: title, season/episode,
+video URL, release date, duration and thumbnail ID. If every requested value is
+stored, it reports success and performs the normal cache invalidation; if any
+field differs (or verification cannot read), the original error remains a real
+failure. This avoids both a misleading error and a risky blind retry without
+loosening read deadlines or pretending partial saves succeeded.
+
+## SESSION 32 (2026-08-25): Vercel production menu cache invalidation fixed
+
+The public Vercel production URL returned a healthy cached page
+(`X-Vercel-Cache: HIT`), and Economy's live Fast API already returned all eight
+current `secondary-nav-v3-menu` icons with the corrected Economy CDN URLs. The
+stale strip was therefore a missing cross-deployment invalidation, not a failed
+read: the Admin action only busts the cache of the deployment handling that
+action, and the WordPress plugin did not send `menu` to the separate Vercel
+production deployment.
+
+AMS Frontend API **1.10.2** now schedules one `menu` webhook at request shutdown
+for nav-menu and menu-item create/update/delete events. Shutdown coalescing
+avoids multiple Vercel calls during a classic bulk menu save and ensures the
+purge happens after the complete ordering is written. The settings placeholder
+now uses `https://ams-economy-frontend.vercel.app/api/revalidate` and warns that
+preview/branch caches are separate. Configure that exact URL and a shared
+production `REVALIDATE_SECRET`, upload the rebuilt plugin, then save the menu
+once to retire the already-stale entry.
+
+Follow-up verification distinguished Vercel's two relevant layers: the Data
+Cache is shared across deployments in one project, but an on-demand ISR purge
+only applies to the domain/deployment receiving it. A protected generated URL
+such as `ams-economy-frontend-<deployment>.vercel.app` can therefore retain its
+own old rendered page after the public production URL is purged. Test the
+public production alias, or temporarily target that exact preview URL and
+supply its Vercel automation-bypass secret.
+
+## SESSION 31 (2026-08-25): protected Vercel cache webhook supported
+
+The Economy main-branch Vercel URL returned `302` to Vercel SSO for both
+`/program` and `/api/revalidate`, so WordPress's unauthenticated publish webhook
+never reached Next.js and the indefinitely cached program registry stayed
+stale. AMS Frontend API **1.10.1** adds an optional Vercel Protection Bypass for
+Automation secret to Settings → Frontend Cache and sends it as the recommended
+`x-vercel-protection-bypass` header. The existing Next revalidation secret stays
+separate and is still checked by `/api/revalidate`.
+
+After uploading the rebuilt plugin, configure the Economy Vercel `/api/revalidate`
+URL, matching Next/WordPress revalidation secret, and the Vercel automation
+bypass secret. The Vercel project must be redeployed after creating/replacing
+the bypass or `REVALIDATE_SECRET` environment variables.
+
 ## SESSION 30 (2026-08-25): Economy Fast API media bucket corrected
 
 The Featured image picker exposed a site-copy bug in Fast API: its CDN base and

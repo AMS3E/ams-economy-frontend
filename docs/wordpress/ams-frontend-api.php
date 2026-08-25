@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AMS Frontend API
  * Description: General-purpose endpoints for the AMS Infotainment Next.js frontend (add new ones here as needed). Read-only + a standalone hero-slider embed + the homepage featured-program picker + anonymous REST commenting + per-user login tokens for authenticated writes + program custom-meta exposed to REST + skips AMS Cache's synchronous page warmer on dashboard writes (96s -> under 1s). Self-contained — deactivate/delete anytime with zero effect on anything else.
- * Version:     1.10.0
+ * Version:     1.10.2
  * Author:      Soth Kimleng
  *
  * Standalone "add endpoints as needed" API file, separate from the legacy
@@ -776,6 +776,10 @@ function ams_afa_revalidate_config() {
     return array(
         'url'    => isset( $opt['url'] ) ? (string) $opt['url'] : '',
         'secret' => isset( $opt['secret'] ) ? (string) $opt['secret'] : '',
+        // Optional Vercel Protection Bypass for Automation secret. Preview and
+        // branch domains otherwise redirect this server-to-server webhook to
+        // Vercel SSO before Next.js can run /api/revalidate.
+        'vercel_bypass' => isset( $opt['vercel_bypass'] ) ? (string) $opt['vercel_bypass'] : '',
     );
 }
 
@@ -833,10 +837,15 @@ function ams_afa_ping_revalidate( $tags ) {
     foreach ( array_values( array_unique( $tags ) ) as $tag ) {
         $query .= '&tag=' . rawurlencode( $tag );
     }
+    $headers = array();
+    if ( $cfg['vercel_bypass'] ) {
+        $headers['x-vercel-protection-bypass'] = $cfg['vercel_bypass'];
+    }
     wp_remote_post( $cfg['url'] . '?' . $query, array(
         'blocking'  => false,
         'timeout'   => 2,
         'sslverify' => true,
+        'headers'   => $headers,
     ) );
 }
 
@@ -870,6 +879,36 @@ function ams_afa_revalidate_author_change() {
 add_action( 'user_register', 'ams_afa_revalidate_author_change', 10, 0 );
 add_action( 'profile_update', 'ams_afa_revalidate_author_change', 10, 0 );
 add_action( 'deleted_user', 'ams_afa_revalidate_author_change', 10, 0 );
+
+/**
+ * Menu reads are cached by the frontend under `menu`. A menu write can happen
+ * through wp-admin, the Customizer, core REST, or this project's Admin, so hook
+ * WordPress itself instead of relying on the UI that initiated the change.
+ *
+ * Schedule one ping at shutdown: the classic menu editor updates many items in
+ * one request, and pinging after every item could both flood Vercel and let an
+ * early regeneration observe a half-written ordering.
+ */
+function ams_afa_schedule_menu_revalidate() {
+    static $scheduled = false;
+    if ( $scheduled ) {
+        return;
+    }
+    $scheduled = true;
+    add_action( 'shutdown', function () {
+        ams_afa_ping_revalidate( array( 'menu' ) );
+    }, PHP_INT_MAX );
+}
+add_action( 'wp_create_nav_menu', 'ams_afa_schedule_menu_revalidate', 10, 0 );
+add_action( 'wp_update_nav_menu', 'ams_afa_schedule_menu_revalidate', 10, 0 );
+add_action( 'wp_delete_nav_menu', 'ams_afa_schedule_menu_revalidate', 10, 0 );
+add_action( 'wp_add_nav_menu_item', 'ams_afa_schedule_menu_revalidate', 10, 0 );
+add_action( 'wp_update_nav_menu_item', 'ams_afa_schedule_menu_revalidate', 10, 0 );
+add_action( 'before_delete_post', function ( $post_id, $post ) {
+    if ( $post instanceof WP_Post && 'nav_menu_item' === $post->post_type ) {
+        ams_afa_schedule_menu_revalidate();
+    }
+}, 10, 2 );
 
 /** Public pages render approved comment counts. */
 function ams_afa_revalidate_comment_change( $comment ) {
@@ -1304,8 +1343,9 @@ add_action( 'admin_init', function () {
 
 function ams_afa_sanitize_revalidate( $input ) {
     return array(
-        'url'    => isset( $input['url'] ) ? esc_url_raw( trim( (string) $input['url'] ) ) : '',
-        'secret' => isset( $input['secret'] ) ? trim( (string) $input['secret'] ) : '',
+        'url'           => isset( $input['url'] ) ? esc_url_raw( trim( (string) $input['url'] ) ) : '',
+        'secret'        => isset( $input['secret'] ) ? trim( (string) $input['secret'] ) : '',
+        'vercel_bypass' => isset( $input['vercel_bypass'] ) ? trim( (string) $input['vercel_bypass'] ) : '',
     );
 }
 
@@ -1331,8 +1371,11 @@ function ams_afa_revalidate_settings_page() {
                         <input type="url" id="ams-afa-reval-url" class="regular-text" style="width:480px"
                                name="<?php echo esc_attr( AMS_AFA_REVALIDATE_OPTION ); ?>[url]"
                                value="<?php echo esc_attr( $cfg['url'] ); ?>"
-                               placeholder="https://info.amscloud.cc/api/revalidate" />
-                        <p class="description">The frontend's <code>/api/revalidate</code> route.</p>
+                               placeholder="https://ams-economy-frontend.vercel.app/api/revalidate" />
+                        <p class="description">
+                            Use the public production deployment's <code>/api/revalidate</code> route.
+                            Preview/branch deployments have separate caches.
+                        </p>
                     </td>
                 </tr>
                 <tr>
@@ -1343,7 +1386,20 @@ function ams_afa_revalidate_settings_page() {
                                value="<?php echo esc_attr( $cfg['secret'] ); ?>" />
                         <p class="description">
                             Must equal the frontend's <code>REVALIDATE_SECRET</code> environment
-                            variable (Dokploy → the app → Environment).
+                            variable in the same deployment (Vercel → Project Settings → Environment Variables).
+                        </p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row"><label for="ams-afa-vercel-bypass">Vercel protection bypass</label></th>
+                    <td>
+                        <input type="password" id="ams-afa-vercel-bypass" class="regular-text" autocomplete="off"
+                               name="<?php echo esc_attr( AMS_AFA_REVALIDATE_OPTION ); ?>[vercel_bypass]"
+                               value="<?php echo esc_attr( $cfg['vercel_bypass'] ); ?>" />
+                        <p class="description">
+                            Optional. Required when the webhook URL is protected by Vercel Authentication.
+                            Paste the project's Protection Bypass for Automation secret; it is sent only in
+                            the <code>x-vercel-protection-bypass</code> request header.
                         </p>
                     </td>
                 </tr>

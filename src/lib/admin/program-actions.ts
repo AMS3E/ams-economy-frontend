@@ -164,6 +164,33 @@ function normalizeEpisode(
   return { title, season, episode, videoUrl, releaseTs };
 }
 
+/** Did WordPress persist every field from an episode save that failed to
+ * answer before our deadline? Published-post hooks on this host can keep the
+ * REST request open long after core has committed the post and meta. */
+function episodeSaveLanded(
+  stored: EditableEpisode | null,
+  wanted: {
+    title: string;
+    season: number;
+    episode: number;
+    videoUrl: string;
+    releaseDate: string;
+    runTime: string;
+    thumbId: number;
+  },
+): boolean {
+  return Boolean(
+    stored &&
+      stored.title === wanted.title &&
+      stored.season === wanted.season &&
+      stored.episode === wanted.episode &&
+      stored.videoUrl === wanted.videoUrl &&
+      stored.releaseDate === wanted.releaseDate &&
+      stored.runTime === wanted.runTime &&
+      stored.thumbId === wanted.thumbId,
+  );
+}
+
 /** Shared catch for the program/episode actions: an expired session goes to
  *  login, a WP rejection reports its status, anything else (timeout on a slow
  *  publish hook, network drop) surfaces the real reason — this is an internal
@@ -248,14 +275,34 @@ export async function updateEpisodeAction(
     const program = await readProgramForEdit(programId);
     if (!program) return { ok: false, error: "Program not found." };
 
-    await updateEpisode(episodeId, {
-      label: `S${season}:E${episode}`,
+    const wanted = {
       title,
+      season,
+      episode,
       videoUrl,
-      releaseTs,
+      releaseDate: payload.releaseDate.trim(),
       runTime: payload.runTime.trim(),
       thumbId: payload.thumbId,
-    });
+    };
+    try {
+      await updateEpisode(episodeId, {
+        label: `S${season}:E${episode}`,
+        title,
+        videoUrl,
+        releaseTs,
+        runTime: wanted.runTime,
+        thumbId: wanted.thumbId,
+      });
+    } catch (e) {
+      // The same host behavior already handled by trashOrConfirm below: WP
+      // commits the write, then slow publish/cache hooks outlive the 120s
+      // response deadline. Re-read the uncached edit record and trust stored
+      // state over a missing HTTP response. A mismatch remains a real error.
+      const stored = await readEpisodeForEdit(episodeId).catch(() => null);
+      if (!episodeSaveLanded(stored, wanted)) throw e;
+      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      console.warn(`[updateEpisode] ${episodeId}: ${msg}, but every requested field is stored — treating as success.`);
+    }
     // Mirror the WP publish webhook locally so this deployment refreshes even
     // if the webhook is down.
     revalidateTag("episodes", "max");

@@ -13,7 +13,7 @@ import { safeTag } from "@/lib/api/client";
  * publish touches in ONE request. Tags in use across the app: "articles",
  * "home", "article:<slug>", "category:<slug>", "comments:<postId>",
  * "daily-events", "authors", "episodes", "tv-show:<id>", "program",
- * "program:<slug>", "featured-program".
+ * "program:<slug>", "featured-program", "menu".
  *
  * Send the RAW slug even when it is Khmer: tags are normalized through
  * safeTag() on both sides, so an over-long percent-encoded slug maps onto the

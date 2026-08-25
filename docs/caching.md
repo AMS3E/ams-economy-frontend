@@ -15,13 +15,14 @@ next: { revalidate, tags } })`, wrapped by `apiFetch`/`fastPublicFetch` in
 makes the calling route dynamic and silently defeats ISR (see the comment on
 `apiFetch` in `src/lib/api/client.ts`).
 
-**Single Dokploy instance, no CDN in front.** The multi-instance tag
-propagation Next's docs describe (`updateTags`/`refreshTags`, Redis
-coordination) does not apply here — the default file-system cache handler is
-authoritative for every request. `.next/cache` is the actual write target; the
-Dockerfile's `runner` stage (`mkdir .next && chown nextjs:nodejs .next`,
-*before* the standalone build is copied in) exists solely so that directory is
-writable by the unprivileged user ISR writes as.
+**The deployment receiving the purge matters.** The Dokploy instance uses
+Next's default file-system cache handler (`.next/cache`). Vercel's fetch Data
+Cache is shared by deployments in the same project, but ISR page responses are
+deployment/domain scoped: Vercel documents that an on-demand revalidation only
+applies to the domain and deployment where it is triggered. Invalidating
+Dokploy does not clear Vercel, and invalidating production does not retire a
+protected preview deployment's already-rendered HTML. The webhook must target
+the exact deployment visitors use.
 
 **Three independent cache layers**, easy to conflate:
 
@@ -64,7 +65,7 @@ visitor after the bust triggers a blocking regeneration and receives the fresh
 page. A low-traffic page can therefore remain expired-but-not-regenerated until
 somebody visits it, without serving its old data after that visit.
 
-`REVALIDATE_SECRET` (Dokploy env) must equal the WordPress-side secret in
+`REVALIDATE_SECRET` (frontend deployment env) must equal the WordPress-side secret in
 **Settings → Frontend Cache**. A wrong secret and an unset one both 401 —
 indistinguishable from outside.
 
@@ -89,6 +90,7 @@ The plugin also invalidates outside post-status changes:
 | User register/profile/delete | `authors`, `article` |
 | Comment create/edit/delete/status transition | `comments`, `comments:<postId>` |
 | Attachment add/edit/delete | `media`, `program`, `articles`, `article` |
+| Navigation menu/menu-item create/edit/delete | `menu` (one shutdown ping per request) |
 
 The blanket tags are a correctness boundary, not accidental duplication.
 `transition_post_status` can run before a REST request has applied terms/meta,
