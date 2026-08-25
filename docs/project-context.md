@@ -11,15 +11,16 @@ So this is the committed copy. **Keep it in the repo, and keep it current.**
 The other checked-in sources of truth are
 `docs/session-log.md` (session-by-session hand-off, the deepest
 detail), `docs/admin-design-system.md` (the admin's visual language — palette,
-primitives, dark mode), `docs/api-integration-status.md` (per-feature
-tracker), and `docs/caching.md` (the ISR model, cache tags, the WordPress
-publish webhook, and prebuild coverage per route).
+primitives, dark mode), `docs/admin/api-integration-status.md` (per-feature
+tracker) and `docs/category-restructure.md` (the ព័ត៌មាន category restructure:
+measured permalink/merge rules, live-tree state, the still-broken URLs and the
+open decisions — **read it before moving any content between categories**).
 
 ---
 
 ## 1. The backend
 
-WordPress at `https://economy.ams.com.kh` (REST base `/wp-json`), **Vodi**
+WordPress at `https://infotainment.ams.com.kh` (REST base `/wp-json`), **Vodi**
 theme on **MasVideos**; media on `s3.ams.com.kh`. 63 plugins boot on every REST
 request, which is the entire reason the fast path exists (see §4).
 
@@ -29,7 +30,8 @@ request, which is the entire reason the fast path exists (see §4).
 - **AMS Frontend API** — OURS, source at `docs/wordpress/ams-frontend-api.php`,
   **installed and ACTIVE**. Adds `tv-show-episodes`, `episode`, the
   `/hero-embed` page, the login/token endpoint, `web/featured-program`,
-  `web/roles`, and the `user_has_cap` program-caps grant. Load-bearing for the
+  `web/roles`, the `user_has_cap` program-caps grant, and the `ams_avatar`
+  profile-picture field on users (1.20.0 — core has no writable avatar). Load-bearing for the
   whole public site — touching it is riskier than touching the fast API.
 - **AMS Fast Read API** — OURS, source at `docs/wordpress/ams-fast-api/`,
   **installed and DEACTIVATED ON PURPOSE** (it is hit by direct URL, so
@@ -72,7 +74,7 @@ midnight *Asia/Phnom_Penh* and Vodi formats it in UTC, so live shows every
 episode one day early — format in Phnom Penh time. And `_episode_run_time` is
 hand-typed and wrong on roughly half the episodes.
 
-**Postman collection:** `docs/ams-infotainment-api.postman_collection.json`.
+**Postman collection:** `docs/api/ams-infotainment-api.postman_collection.json`.
 
 ---
 
@@ -206,7 +208,8 @@ was asked. Every one was measured against live production.
   `fast.php` returns failures as HTTP 200 + `ok:false` + status-in-body (auth
   stays a real 401).
 - **Hosting is the company's own Dokploy since 2026-08-07, NOT Vercel** —
-  `https://info.amscloud.cc`, panel at `deploy.amskh.co`, repo `AMS3E/…`, shipped
+  target hostname `https://eco.amscloud.cc` (legacy `https://info.amscloud.cc`
+  remains live until the Dokploy domain cutover), panel at `deploy.amskh.co`, repo `AMS3E/…`, shipped
   as a Docker image, autodeploys on push to `main`. Vercel is taken down, and with
   it the Bot-Protection 429 that used to force headless Chrome for every public
   check: **plain `curl` works against the site again.** The box is shared with
@@ -224,8 +227,19 @@ was asked. Every one was measured against live production.
   floor is per CALL, so an admin action making N calls pays it N times.
 - **wp-admin's Plugin File Editor CANNOT save** — the site's loopback request
   fails and reverts the change. Deploy via **Plugins → Add Plugin → Upload
-  Plugin → Replace current with uploaded**. The same broken loopback also
-  breaks WP-Cron and scheduled posts.
+  Plugin → Replace current with uploaded**.
+- **WP-Cron NEVER FIRES, so a scheduled post never publishes. MEASURED
+  2026-08-11**, not inferred — it had been written here as a deduction from the
+  loopback failure above and nobody had tested it. The probe
+  (`scratchpad/cron-probe.mjs` pattern): create a post with `status=future` and
+  `date_gmt` two minutes out, poll every 20s, force-delete after. Result: still
+  `future` **266 seconds past its own fire time**, 16 polls, no transition.
+  Not a quiet-site false negative — WordPress runs `wp_cron()` on `init` and
+  the probe's own 16 REST calls each triggered that, so the spawn was attempted
+  and failed every time. Cleanup verified (delete 200, re-fetch 404).
+  Consequence: **scheduling cannot be offered until a trigger lives OUTSIDE
+  this server.** An inbound request from the internet is a normal request, so
+  the broken loopback does not block an external scheduler.
 - **Plugin zips are gitignored** (`docs/wordpress/*.zip`) — they do NOT exist on
   a fresh clone. Rebuild with `powershell docs/wordpress/build-fast-api-zip.ps1`
   before any upload. Same filename every time; ALWAYS bump the version.
@@ -352,34 +366,47 @@ bundle by `next build`, so they go in **Build-time Arguments**, and every one of
 them must carry a non-empty value — the getters use `?? "fallback"`, and `??`
 does not catch `""`.
 
+**`PRERENDER_PUBLIC` is a Build-time Argument too, and defaults to `0` (OFF).**
+Public build-time prerendering is disabled: `generateStaticParams` returns `[]`
+on all seven param'd public routes, so `next build` renders 32 pages instead of
+267 and static generation takes ~4s instead of dying. It was turned off after
+the 2026-08-19 deploy failure — the box (12.2/15.6 GiB RAM, shared with
+revive-*) cannot afford 7 render workers over 267 pages, and the tell was that
+the pages which timed out first were the FAST-PATH-ONLY routes whose whole
+backend cost is 0.36s. That is starved workers, not a slow WordPress. Nothing
+about runtime behaviour changed: every route is still ISR with `dynamicParams`
+on. Set `PRERENDER_PUBLIC=1` to restore it — **in Build-time Arguments, not the
+Environment tab**, which configures the container and would silently do nothing.
+Full reasoning in `src/lib/prerender.ts`.
+
 Two WordPress-side allow-lists gate the frontend, and **both fail as "the
 feature is just broken" with nothing in the logs pointing at them**:
 
 - **The hero iframe needs the frontend origin in `ams_afa_embed_origins()`**
-  (the `frame-ancestors` header) in the AMS Frontend API plugin. Done for
-  both HTTP and HTTPS `localhost:3000` and the old Vercel domain — **NOT for `info.amscloud.cc`, so
-  the hero is blank on the live site right now** ("refused to connect" in the
-  iframe). Parked by the owner on 2026-08-10. Edit the LIVE plugin (the repo copy
-  is source-only) and clear AMS Cache afterwards — that clear IS needed here,
-  because the header is baked into cached HTML.
+  (the `frame-ancestors` header) in the AMS Frontend API plugin. The source
+  allows both `eco.amscloud.cc` and legacy `info.amscloud.cc` during cutover.
+  Upload the rebuilt plugin and clear AMS Cache after changing this list.
 - **Any client-side fetch needs the origin in the AMS3E-API plugin's CORS
   `$allowed_origins`.**
 
 **Hero specifics:** it is a Slider Revolution slider embedded via `<iframe>` at
-`/sr-embed?alias=` rather than reconstructed, because the banners are flat image
-layers with no text or data to model. `/sr-embed` validates the alias against
-Slider Revolution's module table, avoiding `/hero-embed`'s hand-maintained
-whitelist. Each landing has its OWN slider alias —
-home=`cover-apr202021-11` (live Slider Revolution module `SR7_1931_1`), celebrity=`entainment-home-page-1`,
+`/hero-embed` rather than reconstructed, because the banners are flat image
+layers with no text or data to model. Each landing has its OWN slider alias —
+home=`homepage-2` (id 603), celebrity=`entainment-home-page-1`,
 life-style=`cover-animation-11` — passed via `?alias=` (whitelisted in the
 plugin; `AMS_AFA_HERO_ALIAS` is the default).
 
-**Hero sizing:** `HeroEmbed` reserves the slider's responsive height in CSS
-from its own config (`gw:[1840,1840,1024,778,480]`,
-`gh:[650,650,400,350,600]`, breakpoints `[1240,1024,778,480]`). The WordPress
-`postMessage` is only a late exact-height correction. Do not restore the old
-`height:0`-until-message behavior: the embed sends on load, resize, and only 20
-interval ticks, so hydration could miss every message and collapse the hero.
+**Known hero bug, deliberately deferred (owner: "fine for now"):** `HeroEmbed`
+renders the iframe at `height:0` until a `postMessage` arrives, but the WP page
+posts its height on load, on resize, and on an interval that **stops after 20
+ticks × 400ms = 8 seconds**. The parent attaches its listener in a `useEffect`,
+so every message sent before hydration is dropped. If hydration lands after
+that window the hero stays 0px until a resize or reload — so, counter-
+intuitively, *the faster WordPress loads, the more likely it breaks*. The fix is
+CSS-first: the slider's own config (`gw:[1840,1840,1024,778,480]`,
+`gh:[650,650,400,350,600]`, breakpoints `[1240,1024,778,480]`) makes the height
+a pure aspect ratio per breakpoint, so the space can be reserved with no JS and
+`postMessage` demoted to a late correction.
 
 ## 7. Owed to WordPress (not frontend work)
 
@@ -389,7 +416,7 @@ interval ticks, so hydration could miss every message and collapse the hero.
   reports trees. Our nav renders term names verbatim **on purpose**, so these
   surface on the site — fix them in WordPress, not in a mapper.
 - `wp/v2/web/secondary-menu` is registered but dead (returns the HTML 404 page).
-- The broken loopback (§3) also breaks WP-Cron and scheduled posts.
+- WP-Cron never fires, so scheduled posts never publish — measured, see §3.
 - **ស្ថាបត្យកម្មសកល's movie post (221836) has the WRONG `_khi_tv_show_id`:**
   196771, which is ជ្រុងមួយនៃភ្នំពេញ's tv_show. Measured — 196771 returns 13
   Phnom Penh episodes, its real show 221840 returns its own 2. The frontend now

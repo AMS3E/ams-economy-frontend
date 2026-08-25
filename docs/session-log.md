@@ -5,192 +5,1453 @@ general one: Session 14 is the public menu, Session 15 the public fast read
 path, Session 20 the public site's article sliders. Entries are chronological,
 not split by area, because most of them touch both.
 
-## SESSION 33 (2026-08-25): episode-save timeout false failure fixed
+## SESSION 43 (2026-08-25): Economy hostname prepared for info → eco cutover
 
-Editing a published episode again exceeded the Admin's intentional 120-second
-WordPress deadline and surfaced `TimeoutError: The operation was aborted due to
-timeout`. This is the save equivalent of the already-solved delete behavior:
-WordPress commits the post/meta first, then this host's slow publish/cache hooks
-can keep the REST response open beyond the deadline.
+The frontend build default now uses `https://eco.amscloud.cc`. AMS Frontend API
+1.20.1 adds that origin to iframe `frame-ancestors`/postMessage parents while
+retaining `https://info.amscloud.cc` during migration. The relocated AMS3E API
+source allows both origins for browser CORS as well. At the time of this
+change, `eco.amscloud.cc` resolved to the nginx host but returned 404, while
+`info.amscloud.cc` returned the Next.js site: Dokploy must add the `eco` domain
+to this application on container port 3000 and issue its certificate before
+traffic can cut over. Rebuild/upload the plugin and clear AMS Cache so cached
+embed HTML also carries the new parent origin.
 
-`updateEpisodeAction` now re-reads the uncached editable episode after any
-failed response and compares all seven writable values: title, season/episode,
-video URL, release date, duration and thumbnail ID. If every requested value is
-stored, it reports success and performs the normal cache invalidation; if any
-field differs (or verification cannot read), the original error remains a real
-failure. This avoids both a misleading error and a risky blind retry without
-loosening read deadlines or pretending partial saves succeeded.
+## SESSION 42 (2026-08-24): profile pictures — see / upload / change on /admin/profile
 
-## SESSION 32 (2026-08-25): Vercel production menu cache invalidation fixed
+WordPress core has NO writable avatar (`avatar_urls` is an md5-of-email
+Gravatar, unset for every account here — the same fact that made `pub-authors`
+drop its avatar field), so the picture is an ATTACHMENT referenced from user
+meta, carried by our own plugin.
 
-The public Vercel production URL returned a healthy cached page
-(`X-Vercel-Cache: HIT`), and Economy's live Fast API already returned all eight
-current `secondary-nav-v3-menu` icons with the corrected Economy CDN URLs. The
-stale strip was therefore a missing cross-deployment invalidation, not a failed
-read: the Admin action only busts the cache of the deployment handling that
-action, and the WordPress plugin did not send `menu` to the separate Vercel
-production deployment.
+- **ams-frontend-api 1.20.0** registers a writable `ams_avatar` REST field on
+  `user`: read → `{ id, url } | null`; write via the same POST `wp/v2/users/me`
+  the profile screen already uses — `{ id: <attachment> }` sets, `{ id: 0 }`
+  clears. Storage is TWO meta keys, `ams_avatar_id` + `ams_avatar_url`, and the
+  URL is resolved AT WRITE TIME (thumbnail rendition, fallback full) precisely
+  so the fast path can serve it under SHORTINIT, where the s3 offload filters
+  that produce real file URLs never run. Validation mirrors the menu-icon
+  sanitizer: image attachments only, WP_Error otherwise.
+- **fast.php** profile resource adds the two meta keys to its usermeta IN-list
+  and emits `ams_avatar` in the SAME shape as REST, so `mapProfile()` stays one
+  function for both paths (inert plugin shell bumped to 1.8.2). Offline tests
+  still pass (242 assertions).
+- **Frontend**: `Profile.avatar` + `ProfileWrite.ams_avatar` in
+  `lib/admin/settings.ts`; ProfileForm replaces the "Avatar is managed in
+  WordPress" placeholder with preview + Upload/Change/Remove. The file goes
+  through the existing `/api/admin/upload` route immediately (it lands in the
+  media library either way), but the ACCOUNT only points at it when Save writes
+  `ams_avatar` — staged like every other field, and the patch includes the field
+  only when dirty, because sending `{ id: 0 }` unconditionally would clear it.
+- **Degrades, doesn't break, against an old plugin**: reads just lack the field
+  (initials render, as before); a write's `ams_avatar` is ignored by core as an
+  unregistered param.
+- **Deploy = BOTH zips** (`build-frontend-api-zip.ps1`, `build-fast-api-zip.ps1`),
+  wp-admin → Plugins → Add Plugin → Upload → Replace current. Until they're up,
+  the avatar UI saves-but-doesn't-stick.
+- **Sidebar chip** (same session, after the owner uploaded both plugins —
+  deploy verified live: anonymous `wp/v2/users` rows now carry `ams_avatar`):
+  AccountMenu can't read the avatar from its props — the layout's user rides
+  the SESSION COOKIE written once at login — so the chip fetches it
+  client-side after paint via a dedicated `fetchMyAvatar()` action
+  (react-query, `staleTime: Infinity`, mounts once per hard load). The action
+  deliberately swallows every failure into `{ url: null }`: initials are the
+  designed fallback and a decorative fetch must never redirect to /login.
+  ProfileForm pushes the new URL straight into the shared query cache
+  (`MY_AVATAR_QUERY_KEY`) on save, so the chip updates without a reload.
+- The public site renders no avatars anywhere (settled in Session 15), so
+  nothing public changes.
 
-AMS Frontend API **1.10.2** now schedules one `menu` webhook at request shutdown
-for nav-menu and menu-item create/update/delete events. Shutdown coalescing
-avoids multiple Vercel calls during a classic bulk menu save and ensures the
-purge happens after the complete ordering is written. The settings placeholder
-now uses `https://ams-economy-frontend.vercel.app/api/revalidate` and warns that
-preview/branch caches are separate. Configure that exact URL and a shared
-production `REVALIDATE_SECRET`, upload the rebuilt plugin, then save the menu
-once to retire the already-stale entry.
+## SESSION 41 (2026-08-24): the editor can no longer lose work — local backup + leave guard; two title landmines defused
 
-Follow-up verification distinguished Vercel's two relevant layers: the Data
-Cache is shared across deployments in one project, but an on-demand ISR purge
-only applies to the domain/deployment receiving it. A protected generated URL
-such as `ams-economy-frontend-<deployment>.vercel.app` can therefore retain its
-own old rendered page after the public production URL is purged. Test the
-public production alias, or temporarily target that exact preview URL and
-supply its Vercel automation-bypass secret.
+The complaint: leave `/admin/articles/new` mid-write (back arrow, sidebar
+link, closed tab) and everything typed is gone. Fixed with TWO pieces, both
+verified end-to-end in real Chrome over CDP (nothing saved to WordPress).
 
-## SESSION 31 (2026-08-25): protected Vercel cache webhook supported
+### 1. Local backup + restore banner (`src/lib/admin/editor-draft.ts`)
 
-The Economy main-branch Vercel URL returned `302` to Vercel SSO for both
-`/program` and `/api/revalidate`, so WordPress's unauthenticated publish webhook
-never reached Next.js and the indefinitely cached program registry stayed
-stale. AMS Frontend API **1.10.1** adds an optional Vercel Protection Bypass for
-Automation secret to Settings → Frontend Cache and sends it as the recommended
-`x-vercel-protection-bypass` header. The existing Next revalidation secret stays
-separate and is still checked by `/api/revalidate`.
+DELIBERATELY localStorage, not a WP-style server autosave: this admin writes
+to LIVE WordPress, so silent autosave would mint real drafts on production on
+every editor open — including every `/admin/articles/new` click-through test.
 
-After uploading the rebuilt plugin, configure the Economy Vercel `/api/revalidate`
-URL, matching Next/WordPress revalidation secret, and the Vercel automation
-bypass secret. The Vercel project must be redeployed after creating/replacing
-the bypass or `REVALIDATE_SECRET` environment variables.
+- One key per article (`ams-admin:article-backup:<id|new>`), holding the full
+  save payload (title, body markup, status, cats, tags, cover, excerpt, slug,
+  SEO, template). A 5s heartbeat writes it **only when dirty**; dirty = the
+  snapshot differs from a baseline captured when the body registers (baseline
+  is serialize∘parse, NOT the stored bytes — round-trip whitespace would read
+  as permanently dirty). Cleared on successful save; re-baselined after.
+- On return, a banner (toast anatomy, warn accent) offers **Restore backup /
+  Discard**. While the decision is open, ALL backup writes hold — writing
+  would destroy the recoverable work. Restore only touches the body when it
+  actually differs (`BodyEditorHandle.setHtml`, new, one undo step), so a
+  metadata-only recovery still sends no `content` on the next save.
+- `pruneDrafts()`: backups older than 30 days are dropped on editor mount.
 
-## SESSION 30 (2026-08-25): Economy Fast API media bucket corrected
+### 2. Leave guard — each exit path gets what it can
 
-The Featured image picker exposed a site-copy bug in Fast API: its CDN base and
-test fixtures still used `https://s3.ams.com.kh/infotainment`, while the same
-live Economy attachments resolve through core REST under
-`https://s3.ams.com.kh/economy`. The fast `pub-articles` response reproduced the
-wrong URL for attachment 173389, explaining the grid of broken thumbnails.
+- Hard exits (close/refresh/external): `beforeunload` warns + `pagehide`
+  writes. In-app link clicks: capture-phase document listener + `confirm()`
+  (beforeunload never fires on client-side nav — the original loss path).
+- Browser back / router pushes can't be blocked in the App Router: the flush
+  in `registerBody`'s **deregistration** branch persists instead. It must
+  live there, not in the guard effect's cleanup — child cleanups run first,
+  so by parent-cleanup time the body handle is already gone.
 
-Fast API now uses the Economy bucket and its URL/offloader fixtures use Economy
-hosts and bucket metadata. All tests pass and `ams-fast-api.zip` was rebuilt.
-**Replace the installed Fast API ZIP on WordPress and leave the plugin
-deactivated; until that manual upload, the live direct `fast.php` still emits
-the old `/infotainment/` URLs.**
+### 3. THE LANDMINE (regression found + fixed): dangerouslySetInnerHTML on React 19
 
-## SESSION 29 (2026-08-25): Economy Fast API aligned to 1.8.2
+The title was seeded via `dangerouslySetInnerHTML={{ __html: … }}` with a
+comment claiming React skips the DOM when `__html` is stable. **Measured
+false on React 19**: react-dom compares that prop by OBJECT reference and
+`setProp` unconditionally re-runs `innerHTML = …` — an inline `{{ __html }}`
+is a fresh object every render, so ANY re-render of the element wipes the
+typed title. It only ever survived because the React Compiler kept the
+element's identity stable, and the backup guard's additions made the compiler
+bail out of that memoization (A/B-proved with a stash: original code keeps the
+title through an excerpt-section toggle, guard code wiped it). Fix: the title
+is now seeded ONCE through a `useCallback` ref (`attachTitle`) and React
+manages no children on it — immune to re-renders and compiler bailouts alike.
+If any OTHER user-edited `dangerouslySetInnerHTML` element ever appears in a
+client component, it has this same bug.
 
-Upgraded `docs/wordpress/ams-fast-api` from 1.6.1 to the reusable parts of
-Infotainment 1.8.2. The Admin frontend already consumed this contract. It now
-receives custom dashboard windows, fixed 24-hour trending, today's comparison,
-comment-moderation queue counts, and large-first program posters from the fast
-path instead of falling back or receiving partial data. Profile reads also
-understand the optional `ams_avatar` shape, but Economy still has no avatar
-write contract, so it safely remains null.
+### 4. Second landmine, owner-reported: the unmount flush wrote title-less backups
 
-The resulting source matches Infotainment 1.8.2 except that Economy retains its
-required `secondary-nav-v3-menu` public-menu allow-list entry and test. The Fast
-API remains read-only and deliberately separate from the REST cache-purge route
-in AMS Frontend API. PHP syntax, the real cross-plugin token round-trip and all
-244 Fast API assertions pass. **Upload/replace `ams-fast-api.zip` on WordPress
-but leave AMS Fast Read API deactivated; `fast.php` is invoked directly.**
+The owner's test: leave via back-navigation, restore — body came back, title
+didn't. Cause: the deregistration flush (§2) runs from an effect cleanup, and
+React detaches REFS before effect cleanups — `titleRef` is already null
+there, so the snapshot read `title: ""` and overwrote the heartbeat's good
+backup (the body survived because it comes from plain refs, not the DOM;
+that asymmetry was the tell). Fix: `titleTextRef`, a mirror kept current by
+an `input` listener inside `attachTitle` (which now returns a React 19 ref
+cleanup); the snapshot reads live DOM while the element exists and the
+mirror after it is gone. Rule for later: **an unmount-time reader may not
+touch DOM refs — anything it needs must be mirrored into plain refs while
+the DOM is alive.**
 
-## SESSION 28 (2026-08-25): Economy WordPress cache purge backported
+Verified (CDP, real Chrome, trusted input events): heartbeat write ≤5s
+(Khmer title included); beforeunload prompt on reload; banner on return;
+restore brings title+body back and clears the banner; in-app click →
+confirm, cancel stays, accept leaves with backup kept; return → backup
+STILL HOLDS THE TITLE, restore round-trips both; browser-back 0.5s after
+typing (inside the heartbeat window — only the deregistration flush ran)
+keeps title+body; Discard clears key+banner. `npm run build` clean.
+Committed + pushed at the owner's request at the end of this session.
 
-AMS Frontend API **1.10.0** adds the authenticated
-`POST /wp-json/wp/v2/web/cache/purge` route required by the Admin's
-`economy.ams.com.kh · clearing cache…` flow. Only the current production purge
-implementation and its helpers were backported from Infotainment; Economy's
-hero aliases, embed origins and all other site configuration remain unchanged.
+**Also committed for the next machine** (the owner continues the category
+work on a different computer): `docs/category-restructure.md` — the full
+2026-08-21 restructure state, the measured permalink/merge rules, the six
+still-broken URLs with their spec'd fixes, and the open decisions — plus the
+`ams-category-merge` v1.1.0 plugin source rescued from a session scratchpad
+into `docs/wordpress/ams-category-merge/` (zip via
+`build-category-merge-zip.ps1`). That WP-side session had no log entry here;
+the doc is now the carrier.
 
-The endpoint removes cached HTML for the article/program family, homepage,
-taxonomy archives and published WordPress Pages without running AMS Cache's
-slow preload crawl. It uses AMS Cache's own key functions, batches stats-file
-cleanup, returns `SKIPPED` when page caching is absent/off, and has an opt-in
-`AMS_AFA_CACHE_FLUSH_ALL` emergency lever. PHP syntax and the upload ZIP were
-verified locally. **The rebuilt `docs/wordpress/ams-frontend-api.zip` still
-needs manually replacing on Economy WordPress before the live 404 is fixed.**
+## SESSION 40 (2026-08-24): editor gets a Template field + the newsroom spacer convention; three editor defects fixed
 
-## SESSION 27 (2026-08-25): Economy article templates added
+Two features and a defect round, all in the article editor. Nothing was saved
+to production at any point — every check ran on /admin/articles/new or read-only
+REST.
 
-Added the article editor's Template control after measuring the stored
-`template` field across 200 recent live Economy posts. The seven observed
-Economy templates are listed locally because the Economy plugin does not
-provide Infotainment's `/wp/v2/web/post-templates` endpoint; core WordPress does
-already read and write the post's template value. New/untouched articles infer
-their template from Economy's seven topic category IDs and fall back to the
-dominant Economic template, while an editor's explicit choice remains pinned.
+### 1. Post template field, auto-picked from the categories
 
-Profile avatars remain excluded because their upload/removal flow still needs
-the newer WordPress plugin and fast-path contracts.
+A post with no template renders NOTHING below its body on the WordPress site —
+the tail (related stories, section blocks) is the template's job. The editor now
+carries a Template control, and it fills itself from the categories.
 
-## SESSION 26 (2026-08-25): reusable Infotainment Admin improvements ported
+- **Plugin 1.19.0**: `GET wp/v2/web/post-templates` — the active theme's
+  `get_post_templates()` list (child theme walks the parent chain), gated on
+  `edit_posts`. Core REST exposes a post's template VALUE (writable — verified
+  in the POST args) but never the list of legal ones; Gutenberg gets it from
+  editor bootstrap, not the API. DEPLOYED and owner-verified.
+- **The map was MINED, not designed** (`src/lib/admin/article-template.ts`,
+  940 posts sampled): the template names LIE (ព័ត៌មានប្លែកៗ uses
+  `entertainment-news-template.php`; 959 used `celebrity` on 99/102), and the
+  REPORTS side deliberately carries none (170/172) — which is exactly the
+  "nothing after the body" complaint, so the owner chose to give reports
+  templates too. Three measured overrides (960/969/967) + four subtree defaults
+  (957,972 → entertainment-news; 958,973 → life-style); 956 បំណិនជីវិត ranks
+  LAST (catch-all; loses every measured head-to-head — note this is the exact
+  OPPOSITE of the permalink tie-break, where 956 wins). Replay over the sample:
+  93.7% agreement; the rest is the owner's three deliberate policy changes plus
+  5.4% scattered editor variance.
+- **UI**: a summary row beside Status (label left, value right), not a fold —
+  `Dropdown` grew a `variant="link"` trigger for it. Auto-fill runs until the
+  author picks something else by hand; picking the suggested value counts as
+  agreement and keeps auto-fill live. `template` rides the normal save payload
+  ("" = Default template, always sent).
+- **Found on the way**: every portal'd Dropdown menu in the admin was rendering
+  Latin text in BATTAMBANG — the portal escapes the div that declares
+  `--font-admin`, and the root layout puts `--font-battambang` on `<html>`.
+  Fixed in the primitive (re-declare the variable on the portal root); Users,
+  Media, Programs, Articles filters all inherit the fix.
+- **Open**: the `template` WRITE has never been exercised end-to-end (that
+  needs saving a real post — production). Schema says writable; first real
+  editor save will prove it.
 
-Compared the Economy Admin with `D:\ASM\ams-infotainment-frontend` and ported
-the frontend-only improvements that do not depend on Infotainment's WordPress
-schema: article title seeding that survives React re-renders, five-second local
-draft recovery plus leave guards, Gutenberg's bottom appender, the measured
-media-spacing behavior, and portal/font fixes for the media picker and shared
-dropdown. Economy branding, API origins, menu slug and SEO labels remain local.
+### 2. The spacer convention, applied for the author
 
-Profile avatars were deliberately not copied because they require AMS Frontend
-API 1.20.0; Economy's plugin does not carry that contract. Template selection was added
-in Session 27 after Economy's own categories and stored values were measured;
-it does not require the newer endpoint because its verified vocabulary is local.
+Measured against the 25 most recent live articles, not designed: **25/25 open
+with a 10px spacer; 78/78 media runs are PRECEDED by a 30px spacer, 66/78
+followed; ZERO spacers between consecutive media** (68 stacked pairs); the only
+heights on the site are 10px and 30px. What the newsroom wraps is the RUN, not
+the block.
 
-## SESSION 25 (2026-08-24): homepage banner restored
+`src/components/admin/articles/spacers.ts`, wired into the editor's seed and
+`onChange`: **add only on insert, remove whenever orphaned.** New docs seed
+`spacer(10px) + paragraph`; inserting image/video/gallery wraps the run it
+lands in (leading spacer skipped when the run opens the document — the opener
+already did that job; trailing always emitted); our spacers carry
+`className: ams-media-spacer` so the sweep never eats an author's own; deleting
+the media sweeps its boundaries, deleting a spacer by hand STAYS deleted (the
+editor never fights the author). `joinRuns` handles the real insertion point
+(below the selection = AFTER the trailing spacer): fresh media separated from
+media by one of OUR spacers pulls the run together. The transform shares the
+insert's commit, so one Cmd+Z takes the image and its spacers together.
+Existing articles are untouched — nothing runs on load, nothing marks dirty.
+14 unit tests in the session scratchpad (no JS runner in the repo — deliberate).
 
-The local homepage hero was blank for two independent reasons.
+### 3. Three defects
 
-- `HeroEmbed` kept the iframe at `height:0` and `opacity:0` until a WordPress
-  `postMessage` arrived. The embed stops its retry loop after eight seconds, so
-  hydration could miss every message and the frontend's ten-second fallback
-  then collapsed the whole band. The frame now reserves the Slider Revolution
-  grid's exact responsive ratios in CSS and uses the message only as a late
-  height correction.
-- WordPress's live homepage now renders Slider Revolution alias
-  `cover-apr202021-11` (`SR7_1931_1`), while AMS Frontend API still defaulted to
-  the deleted `homepage-2`. `/hero-embed` therefore returned the Slider
-  Revolution error module with HTTP 200. AMS Frontend API **1.9.3** updates the
-  default/whitelist entry, and its zip was rebuilt at
-  `docs/wordpress/ams-frontend-api.zip`. The frontend now uses the already-live
-  `/sr-embed?alias=` route, which validates against Slider Revolution's module
-  table and therefore works immediately without waiting for that plugin upload.
+- **Block toolbar painted OVER the media dialog** — the media-upload bridge
+  mounts MediaPicker INSIDE the image block, so its z-index 1000050 was trapped
+  in the block's own stacking context while the toolbar portals to <body> at
+  1000000+. MediaPicker now portals to <body> (with the same `--font-admin`
+  re-declaration the Dropdown fix needed). Fixes every mount point at once.
+- **"Type / to choose a block" never appeared after the last block** — BlockList's
+  own root appender only renders for an EMPTY document; in wp-admin it is the
+  EDITOR package that passes `renderAppender`, which a bare BlockEditorProvider
+  must do itself. Wired `DefaultBlockAppender` with wp-admin's rule (hidden
+  when the last block is an empty paragraph — that paragraph already renders
+  the same placeholder). Two casts, documented in place: the package's .d.ts
+  lags its runtime. This had been missing since the editor was built; media at
+  the end of a doc (now the normal case) is what surfaced it.
+- **"Typed text is lost without Enter" — measured FALSE** on the current build:
+  fiber-level read of the provider's state shows plain typing is captured and
+  saved. What actually discards is clicking AWAY from the open slash menu —
+  stock Gutenberg, identical in wp-admin (Enter or a mouse click on the item
+  both commit).
 
-Verification: the current live homepage module reports the same responsive
-grid already documented (`1840×650`, `1024×400`, `778×350`, `480×600`); the
-frontend production build, TypeScript, focused ESLint and plugin PHP syntax all
-pass. The current plugin zip should still be uploaded so `/hero-embed` is repaired,
-but it is no longer a blocker for the frontend hero.
+Watch item: two transient `Cannot read properties of null (reading 'current')`
+browser errors during dev-HMR churn while iterating; never reproduced on a
+clean load. If the editor ever freezes in dev, pull that thread first.
 
-Local development now runs with Next.js `--experimental-https` at
-`https://localhost:3000`. AMS Frontend API **1.9.4** also allows that HTTPS
-origin in the slider iframe's `frame-ancestors` policy; its upload zip was
-rebuilt. Until 1.9.4 is installed on WordPress, the browser will correctly run
-the frontend over SSL but WordPress will refuse to frame the slider on that
-origin.
+## SESSION 39 (2026-08-20): the failed deploy — public prerendering turned OFF
 
-## SESSION 24 (2026-08-14): ISR invalidation flow completed
+`6d6a816` (Session 38's preview button) failed to deploy. It was not the cause:
+`git diff 4a5bf5c 6d6a816 -- src/ ':(exclude)*admin*'` is EMPTY — the public
+build graph was byte-identical to the deploy that had just succeeded, the change
+added no request (one extra `_fields` entry on a call already being made), and
+`getPostForEdit`/`updatePost`/`createPost` are unreachable during `next build`
+(no admin route has `generateStaticParams`).
 
-Audited the whole public cache path from `generateStaticParams` through cached
-fetches, `/api/revalidate`, and the WordPress hooks. The one-hour classic ISR
-model stays unchanged. The webhook now uses
-`revalidateTag(tag, { expire: 0 })`, so its first post-invalidation visitor
-receives regenerated content instead of one stale SWR response.
+**The real cause is the box, not WordPress.** The build died in static
+generation: 267 pages, 7 render workers, every page retried 3x against a 60s
+per-page wall, then one article exhausted its attempts and took the deploy with
+it. The tell is WHICH pages timed out first — `/strange`, `/culture`,
+`/category/hot-news`, `/author/naro-ams`: **fast-path-only routes whose entire
+backend cost is 0.36s, measured.** A slow WordPress cannot make those take 60s;
+starved workers can. The host is documented tight (12.2/15.6 GiB RAM, disk 86%,
+shared with revive-ads/revive-db), and the build container's own outbound
+fetches were failing too (`[fast] … (Error)` in the log). Measured against live
+WP the same day: fast path 0.19-0.43s, `get-article-by-slug` 3.7s, and **7
+concurrent article fetches finished in 4s wall clock with no contention
+penalty** — the backend handles the build's exact load fine.
 
-- `apiFetch` and `fastPublicFetch` now normalize every tag through `safeTag`,
-  so long encoded slugs cannot be cached under a tag the webhook hashes
-  differently.
-- AMS Frontend API **1.9.1** adds blanket correctness tags for old article
-  slugs, category counts/routes and author membership; includes WordPress
-  pages; and hooks category, profile/user, comment and attachment lifecycle
-  changes. The zip is rebuilt at `docs/wordpress/ams-frontend-api.zip`.
-- Dashboard article save/unpublish/trash, category edits, profile writes and
-  media deletion now mirror the public invalidations locally instead of
-  depending entirely on the production webhook.
-- Verification: plugin PHP syntax, 227 offline fast-API assertions, TypeScript,
-  focused ESLint and a production build all pass; the build prerendered 226
-  pages. **The 1.9.1 plugin zip still needs uploading/replacing in WordPress and
-  deactivate/reactivate before the new external hooks are live.**
+Note the `[fast] categories` / `[fast] profile` warnings in that log are ambient,
+NOT a symptom: Next attempts a prerender pass on all 18 admin pages (none sets
+`force-dynamic`), the session readers throw without a cookie, and they fall back.
+They appear in successful builds too — including this session's.
+
+### What changed
+
+- **`src/lib/prerender.ts` (new)** — `PRERENDER_PUBLIC`, off unless `"1"`. All
+  seven param'd public routes early-return `[]` before the fetch, so the WP call
+  never fires. `program/[slug]/[episode]` already did this.
+- **`next.config.ts`** — `staticPageGenerationTimeout: 300` (default is 60).
+  Belt-and-braces for whatever still renders at build time.
+- **`Dockerfile`** — `ARG PRERENDER_PUBLIC=0` + builder ENV. Build-time, so
+  Dokploy's Environment tab is the WRONG place for it (project-context §6).
+
+**Measured result: 267 pages -> 32, static generation 4.4s, build exits 0.**
+Runtime behaviour is unchanged — every route is still ISR (`revalidate = 3600`)
+with `dynamicParams` on, so a page renders on first request and caches exactly
+as the other 10,000+ articles already do, behind the existing `loading.tsx`
+skeletons. The public site is not the live property (the public reads WordPress
+directly); this deployment exists for `/admin`, which prerenders nothing.
+
+### Open
+
+- **Disk 86% on the Dokploy host.** Rendered pages are NOT the problem — they
+  live in the container's writable layer and die with each deploy (no volume is
+  configured). Old images and BuildKit cache are what accumulate. Prune.
+- **A `pub-article` resource in fast.php** would make `get-article-by-slug` ~0.2s
+  instead of ~3.7s — the last slow read in the whole public path, and what would
+  make `PRERENDER_PUBLIC=1` cheap enough to switch back on.
+
+
+## SESSION 38 (2026-08-19): editor preview button opens the LIVE WordPress page
+
+Owner's call: the editor's "Preview in new tab" control (the external-link icon
+by the device switcher) should land editors on the article as the PUBLIC reads
+it — `infotainment.ams.com.kh/<category-path>/<slug>/` — not on this frontend's
+`/article/<slug>`.
+
+The category path is the trap, deliberately not taken: WP picks the category in
+a permalink by its own rules and this site has custom permalink overrides
+(see `ams-fast-api/tests.php` term-link cases), so the URL is never derived
+here. WordPress states it instead, in the `link` field it already returns:
+
+- `getPostForEdit` now asks for `link` in `_fields` and `EditablePost` carries
+  it — covers opening an existing article.
+- `updatePost`/`createPost` returns are the new `SavedPost` (with `link`) —
+  WordPress echoes the full post on every write, we were typing it away.
+  `SaveResult` forwards it; `save()` stores it in new `wpLink` state. So the
+  button points at the real permalink the moment a publish lands, no reload
+  (owner flagged that asking editors to refresh would confuse them).
+- `previewHref` (published branch) is `wpLink || undefined` — the control HIDES
+  when no link is available (owner's rule) instead of guessing a URL. It also
+  now branches on `savedStatus` (what WP holds NOW), not the stale load-time
+  `post.status`, so it follows an in-session publish/unpublish. The
+  draft-preview branch (`/?p=<id>&preview=true`, needs a wp-admin session) is
+  unchanged.
+
+No WP-side change, no extra request. `tsc --noEmit` clean.
+
+## SESSION 37 (2026-08-18): admin UI — filter menus escape their panel; the editor gets ONE status button
+
+Two owner-reported defects on the Articles screens, both about a control that
+disagreed with what it was sitting in.
+
+### 1. Filter dropdowns were clipped, not merely tall (`src/components/admin/Dropdown.tsx`)
+
+Owner's screenshots: the Category list (26 items) and the Author list (~30) got
+cut off mid-list, and the right-most filter (Date) ran off the right edge.
+THREE causes stacked:
+
+- The menu was `position: absolute` inside `Surface`, which is
+  `overflow: hidden` (`ui.tsx`). The list wasn't overflowing the VIEWPORT — the
+  white panel was slicing it. Nothing drawn over the page can be laid out
+  inside it.
+- No `max-height` / internal scroll: a 26-item list is taller than the screen
+  even unclipped.
+- Every call site is `align="left"`, so the last filter in the toolbar opened
+  rightwards past the window.
+
+Fix, in the primitive (so Users, Media and Programs get it too): the menu now
+renders through `createPortal` into `document.body` as `position: fixed`, with
+`place()` solving both axes from the trigger's `getBoundingClientRect()` —
+measured in the CLICK handler, not an effect (the React-compiler lint). It
+flips above the trigger when down is cramped, caps height at 420px with
+`overflow-y: auto`, and anchors to whichever horizontal edge lets it grow
+inwards (`maxWidth` caps it at the far edge, so long Khmer labels wrap instead
+of pushing the menu off-screen). Closes on outside scroll/resize/Escape;
+scrolling INSIDE the menu is exempt. Options are real `<button role="option">`
+now, not click-handled divs. z-index 1000010/11 — above the modals a Dropdown
+can appear in (100/120/1000) and Gutenberg's popovers (1000001), below the
+media dialog (1000050) and the editor toast (1000060).
+
+### 2. The editor's two save buttons contradicted the Status panel (`ArticleEditor.tsx`)
+
+Measured, not assumed — the old `primaryTarget` mapped everything that wasn't
+Pending or Private to `Published`. So:
+
+- Ticking **Draft** and pressing the primary button PUBLISHED the article.
+  Draft was the one status the radio could not commit.
+- The only route to draft was a permanently-visible **Save draft** secondary
+  which, on a LIVE article, sent `status: draft` — silently unpublishing it
+  (and firing the legacy purge) with nothing in the UI saying so.
+- The top-bar pill rendered the SELECTED status, so ticking Draft made it read
+  "Draft" over an article that was still live.
+
+Now: `pubStatus` (the panel's intent) and `savedStatus` (what WordPress holds)
+are separate state. The pill shows `savedStatus`; an unsaved selection shows as
+`→ Draft` beside it plus a "Not saved yet — press X to apply it" line under the
+panel's Status row. ONE button, labelled from the pair (owner-approved matrix):
+
+| saved | selected | button |
+|---|---|---|
+| new / draft | Draft | Save draft |
+| new / draft | Published | Publish |
+| any | Pending | Submit for review |
+| published | Published | Update |
+| published | Draft | Switch to draft (confirms) |
+| published | Private | Make private (confirms) |
+
+`save()` no longer takes a target override (it commits `pubStatus`) and returns
+a boolean so the confirm dialog can stay open on failure, same contract as the
+trash flow. Any Published → non-public save goes through `ConfirmDialog` first:
+it takes the public page down and drops the article from every listing, and it
+still fires the legacy cache purge (`everPublished` path, unchanged).
+
+Consequence the owner accepted: with one button there is no "save my edits but
+keep the old version public" on a published article — pressing Update pushes
+them live. That was already true; the second button just made it look
+otherwise. WordPress's pending-revisions model doesn't exist here.
+
+### 3. Articles list: 20 rows a page
+
+`PER_PAGE` 10 -> 20 in BOTH places that have to agree — `src/app/api/admin/
+posts/route.ts` (the BFF's fixed page size, which is what WordPress actually
+gets) and `ArticlesScreen.tsx` (the skeleton row count and the "1-20 of N"
+footer). The next-page prefetch is unchanged.
+
+### 4. Opening an article now says it is opening
+
+Two waits, both previously blank:
+
+- **The server read** (post-for-edit + category tree). The nearest boundary was
+  `/admin/loading.tsx`, a LIST skeleton — so a click on a row flashed a table
+  on the way to an editor. Added `src/app/admin/articles/[id]/loading.tsx` (and
+  `new/loading.tsx`).
+- **The Gutenberg bundle**, which is the slow half: `@wordpress/block-editor`
+  is `ssr: false` and its `loading` fallback was `<div minHeight 320px />`, so
+  the real top bar sat over a blank page — with its status line reading
+  "Loaded", because that text only knew about the SERVER data.
+
+Both now render `EditorSkeleton` (`src/components/admin/articles/`), one
+server-safe component with the editor's real geometry: 56px bar + 56px band +
+768px sheet at `calc(100vh - 176px)` + the 320px docked column. `chrome` draws
+the app top bar for the route fallback and is omitted inside the editor (the
+real one is already up), so the two waits read as ONE continuous state. The
+band carries a spinner + `note` ("Opening the article…" / "Preparing the
+editor…") — skeleton bars say something is coming, only words say what.
+
+`registerBody` doubles as the readiness signal now (GutenbergEditor registers
+its handle from an effect once mounted), so the top bar shows "Preparing the
+editor…" until the canvas is real. Per Next 16's `useLinkStatus` doc, a
+route-level `loading.tsx` is the preferred fix and makes an inline link-pending
+hint unnecessary — the boundary is also what the router prefetches.
+
+### Verification
+
+`tsc --noEmit` clean, `eslint` clean, `npm run build` green (Panda emitted the
+new utilities). NOT verified in a browser this session — the admin needs a live
+WordPress session to render, so the visual checks left for the owner are: the
+Category/Author/Date menus near the bottom and right of the window, a
+Published -> Draft save, and the two loading states on a cold cache.
+
+
+## SESSION 36 (2026-08-18): the cache mystery solved at the source — afa 1.17.0 rebuilds `web/cache/purge` on `scm_purge_cache_uri()`; flush-all demoted to fallback
+
+**⚠ PENDING AT SESSION END: `docs/wordpress/ams-frontend-api.zip` (1.17.0) is
+built and php-lints clean but NOT uploaded.** Frontend chip/comment changes are
+in the repo but the plugin must go live first (the endpoint's response shape is
+compatible both ways, so order doesn't actually break anything — the chip just
+reports flush-all-style numbers until the upload).
+
+**Project direction shifted this session:** the WordPress user site is the main
+public focus now; the Next.js side is the admin dashboard (fast read/write).
+That makes "publish from the dashboard → WP site serves stale cache" the last
+main problem, and this session closed it properly instead of via 1.15.0's
+flush-everything stopgap.
+
+### The investigation: reading ams-cache's own source (docs/wordpress/ams-cache.zip)
+
+Owner pulled the live site's AMS Cache (Cache Master fork) plugin folder; kept
+in the repo as `docs/wordpress/ams-cache.zip`. Reading it explained every
+mystery of sessions 34-35's cache work:
+
+- **The real cache key** is `md5( scm_get_cache_key_prefix() . '|' . <path> )`
+  with a site-specific prefix (`scm_<blog_id>_<dir_hash>_`), path normalized
+  (query dropped, trailing slash forced). Our 1.10.0 purge computed
+  `md5(<path>)` — every key it deleted NEVER EXISTED. That is the entire reason
+  "purge reported success while the site served 22-hour-old HTML" for three
+  versions, and the sole justification 1.15.0's flush-all had.
+- **The 96s write was never the purge** — it was `scm_preload_critical_urls()`:
+  AMS Cache's save hooks purge a handful of keys (ms) and then SYNCHRONOUSLY
+  re-render up to 25 URLs over HTTP (8s timeout each) inside the save request.
+  Purging is cheap; warming always was the cost.
+- **`scm_purge_cache_uri( $path, $driver )` exists** — the plugin's own
+  single-page purge: correct key by construction, deletes the stats JSON
+  sidecar and nginx static copy too, zero HTTP. The clean primitive 1.14.0
+  didn't know about when it reached for the heavyweight `scm_update_post()`
+  (which drags the preload along, hence the self-HTTP-block hack).
+- **The /strange/ gap is structural, not our bug**: ams-cache's purge
+  vocabulary is post URL + taxonomy/date/author archives, period. Landing
+  PAGES that render latest-news template blocks are invisible to it — a stock
+  wp-admin publish also leaves them stale.
+
+### afa 1.17.0 — the proper targeted purge
+
+`web/cache/purge` (still called by the editor's browser AFTER the save; the
+~4s write is untouched):
+
+- Loops `scm_purge_cache_uri()` over: article URL + homepage + its category
+  archives (with ancestors) + its tag archives (new) + ALL published landing
+  Pages (~55, same enumeration as 1.14.0). ~60 key deletes, sub-second,
+  deduped by `scm_normalize_cache_uri`.
+- `cached`/`purged` per page are finally HONEST: `has()` with the correct key
+  (via `scm_get_cache_key`) before and after. `cached:false` = nobody visited
+  since last expiry — healthy, not a failure.
+- **Flush-all is now opt-in**: `AMS_AFA_CACHE_FLUSH_ALL` defaults FALSE;
+  defining it true in wp-config.php restores the whole-store clear — the
+  escape hatch if the target list ever misses a surface in practice.
+- Guards: if the fork ever loses `scm_purge_cache_uri`/`scm_get_cache_key`,
+  the endpoint answers ERROR saying so — never again a purge that silently
+  does nothing.
+- `ams_afa_purge_landing_pages()` (the scm_update_post workaround) replaced by
+  `ams_afa_landing_page_targets()` feeding the same purge loop.
+
+### No re-warm — decided, with numbers
+
+~4-7 stories published/day vs ~5k visits/day. A purged page serves CORRECT
+content on its next visit; the first visitor per page pays one 5-19s render
+and re-fills the cache. Cold-is-not-stale, and at this publish rate the slow
+loads are noise — so no warming step at all (the chip's old no-cors re-warm
+loop is deleted). If the owner ever reports cold landing pages hurting, add a
+warm list then, with data.
+
+**LegacySiteChip** simplifies to purging → "N pages refreshed" (real purged
+count) / error. The error state is the only case where the old site truly
+still shows old content.
+
+### Retro-note: 1.13.0-1.16.0 were never logged
+
+Sessions between 35's Revive work and this one shipped afa 1.13.0→1.16.0 (the
+'purge'-mode experiment that cost ~29s in-write and aborted saves at the
+client's 30s budget, the landing-page purge, flush-all, and moving all cache
+work out of the write into web/cache/purge). Their story lives in the plugin's
+own comments and commit 58cb4da — and the key parts are retold above.
+
+### Verify after upload (no test publish needed — hits prod safely)
+
+1. `POST /wp-json/wp/v2/web/cache/purge {post_id: <recent article>}` with a
+   token → expect `cached:true → purged:true` on pages the site serves, ~60
+   rows, no `flushed:true`.
+2. Confirm `/strange/` serves fresh HTML afterwards (ams-cache footer
+   timestamp) while an unrelated old article page stays cached.
+
+### 1.17.0 VERIFIED LIVE 2026-08-18, then 1.17.1: trash was never wired
+
+Owner uploaded 1.17.0 and confirmed the publish flow works ("it work
+perfectly"). Pre-upload baseline held: /strange/ was serving a 01:30 copy
+(ams-cache footer; 5.6s cold render, 53 SQL queries → 0.024s cached, 0
+queries — the footer documents the whole trade).
+
+Then the owner's next question found the gap: TRASHING. No trash flow called
+the purge — a deleted article's cached page (a ghost: the article is gone but
+the page still serves) plus every listing stayed live until TTL. Two-sided
+fix:
+
+- **afa 1.17.1**: `wp_trash_post()` renames the slug to `<slug>__trashed`
+  BEFORE the dashboard's purge call arrives, so `get_permalink()` on the
+  trashed post names a path that was never cached. `ams_afa_cache_purge_targets`
+  now strips the suffix to reconstruct the original path — without this the
+  purge misses precisely the ghost page a trash exists to remove (the 1.10.0
+  failure shape through a different door). Zip rebuilt; **1.17.1 pending
+  upload at session end** (1.17.0 is what's live).
+- **Frontend**: `startLegacyRefresh()` now fires after successful trash in
+  ArticlesView (published posts only — drafts never had public pages; chip
+  mounted in the list header with no postId so it wears any active run),
+  ProgramTopBar (published programs; runs chip-less through the navigation to
+  the list), and EpisodesList (chip-less: the TopBar chip is pinned to the
+  program's id, not the episode's).
+
+### 1.17.1 VERIFIED LIVE, then the program flow completed — afa 1.17.2
+
+Owner confirmed trash works. Then asked for the same coverage across the whole
+program flow. What was already wired: program edit-screen publish/unpublish
+(ProgramEditContext, Session 34 era) and both trashes (above). What was NOT:
+
+- **Episode create/update never purged** — and an added episode is exactly
+  what the show/movie pages exist to display. EpisodesList now fires on the
+  dialog's save (episodes always post PUBLISHED; the dialog passes the episode
+  id up through onSaved).
+- **"Create & publish" on a new program never purged** — NewProgramView fires
+  on publish creates; the run survives the client-side navigation into the
+  editor, whose chip picks it up (same postId).
+- **afa 1.17.2: the purge learns the MasVideos FAMILY.** For
+  movie/tv_show/episode targets it walks the links — episode `_tv_show_id` →
+  show, movie `_khi_tv_show_id` → show, and the reverse (show → its fronting
+  movie, one meta query) — so an episode write purges its show's and movie's
+  pages too, at most two extra targets. Container URLs get the same
+  `__trashed` strip (a program trash trashes its container with it).
+- Episode purges are gated on the PROGRAM being published (via
+  useProgramEdit — the [id] layout's provider wraps the episodes tab): a
+  draft program's episodes are linked nowhere, so their pages can't have been
+  cached; defaults to purging if the context is ever absent.
+
+**Zip rebuilt at 1.17.2 — PENDING UPLOAD at session end** (1.17.1 is live;
+without 1.17.2 the episode/program purges still run but miss the show/movie
+family pages).
+
+### Dashboard episodes were invisible on the WP site — afa 1.18.0 `_seasons` sync
+
+Owner's find, with the decisive clue: a dashboard-created episode appears on
+the Next.js side but NOT on the WP show page — unless it's manually added in
+wp-admin under TV Show data → Seasons & Episodes → Episode(s). Not a cache
+problem. **Two different sources of truth:**
+
+- The WP site (Vodi/MasVideos) renders episode lists from the SHOW's
+  `_seasons` meta — a serialised repeater of { name, image_id, episodes[],
+  year, description } that the wp-admin box edits. `$tv_show->get_seasons()`
+  in the theme; no query. An episode absent from the array does not exist to
+  the WP site.
+- Our side (dashboard + Next.js pages) queries episode posts by `_tv_show_id`
+  meta — which dashboard-created episodes have, hence they appeared here.
+- `createEpisode` (program-edit.ts) writes only episode-side meta; its own
+  comment said "`_seasons` stays in wp-admin" — a UI-phase scoping decision
+  the WP-site-first plan shift turned into a bug.
+
+**afa 1.18.0**: `ams_afa_sync_show_seasons()` reconciles on
+`rest_after_insert_episode` (fires after post + meta are fully written),
+`wp_trash_post`, `before_delete_post`, and `untrashed_post` (publish only —
+core untrashes to draft). Behaviour, per the owner's ruling that order must
+self-heal ("people make mistake but we'll still want to see the episode in
+order and season in order"):
+
+- Episode slotted into the season its "S2:E8" label names; the season is
+  matched by the NUMBER in its name (Khmer numerals translated — "រដូវកាលទី ២"
+  answers to 2) and created in the site's Khmer naming if missing.
+- Episodes sorted by episode number within the season (backfilled E8 lands
+  between E7 and E9), seasons sorted by number; both stable on ties.
+- Every listed episode's `_tv_show_season_id` re-pointed at its season's
+  CURRENT index (indexes shift when seasons are added/re-ordered; the episode
+  page prints the season name through it). Writes only on drift.
+- Remove-first-then-re-add, so label edits MOVE an episode between seasons.
+- Manual wp-admin edits still work; the next sync reconciles them.
+
+No frontend change needed — the 1.17.2 family purge already makes the WP
+show/movie pages refresh right after the episode write.
+
+**1.18.0 UPLOADED and VERIFIED LIVE 2026-08-18.** Owner re-saved the orphaned
+demo episode (S2:E8, created pre-1.18.0) with a run-time edit ("3:08" →
+"3:08 minutes"): the episode was adopted into the show's `_seasons`, and BOTH
+the WP site and Next.js showed the update immediately. Episodes created
+before 1.18.0 and never manually attached stay invisible until re-saved once
+from the dashboard (a no-change Save suffices); if orphans pile up, a one-shot
+`web/episodes/adopt` sweep endpoint is the designed follow-up — not built.
+
+### Finalization round: the owner's last four dashboard points — afa 1.18.1
+
+Commit 634ce15 pushed (deploys the trash/episode purge wiring); then the
+owner's finalization list, all four discussed and approved before building:
+
+1. **ព្រឹត្តិការណ៍ before បទយកការណ៍ in the editor's category rail.** The
+   list was WP-alphabetical (ប sorts before ព in Khmer). `PLACE_BEFORE` pin
+   pairs in categories.ts `buildTree` — each [mover, anchor] pair moves the
+   mover directly before its anchor among siblings, rest stays alphabetical;
+   applies everywhere the shared tree renders. (The Show-all dialog already
+   count-ranked families for the same reason — untouched.)
+2. **Ancestor-closed category selection** (rules agreed with owner): checking
+   a child auto-checks its ancestors; unchecking a parent drops its checked
+   subtree; unchecking a child leaves the parent. Old rule-violating posts
+   are NOT rewritten on open — engages only on click. One `toggleCategory` in
+   ArticleEditor, used by both the rail and the Show-all dialog.
+3. **Chip said "couldn't refresh" for purges that succeeded.** Root cause:
+   default 30s client timeout vs an endpoint doing ~60 recursive stats-tree
+   scans (one per scm_purge_cache_uri call) on a slow box — completed late,
+   reported failed. Fixed both ends: purge call now waits 120s, and **afa
+   1.18.1** batches the purge — driver keys + nginx per target, then ONE
+   stats-tree sweep matching all purged keys/URIs (keys still from
+   scm_get_cache_key, never guessed). Zip at 1.18.1 — PENDING UPLOAD.
+4. **New episode invisible until manual reload, no feedback.** The list now
+   overlays a fully-formed optimistic row the moment the dialog's save
+   returns (dimmed + "syncing…" pill), opens its season group, and the row
+   hands over to the server list by DERIVATION when router.refresh() lands
+   (id present + fields match — no setState-in-effect). Trash drops the
+   overlay entry so a trashed row can't resurrect.
+   Owner follow-up, same session: TRASH mirrored too — a `removed` id set
+   hides the row the moment the trash succeeds and the banner says
+   "Episode X moved to trash."; entries go inert by the same derivation once
+   the server list stops carrying the id.
+
+## SESSION 35 (2026-08-18): display ads move to Revive Adserver; the hero iframe stops booting the MSA popup, then gets ~44× faster — afa 1.11.0 → 1.12.0
+
+**✅ 1.11.0 UPLOADED and verified live 2026-08-18** (popup gone from both embed
+routes, `info.amscloud.cc` in frame-ancestors — numbers under "Verified" below).
+
+**⚠ PENDING AT SESSION END: `docs/wordpress/ams-frontend-api.zip` (1.12.0,
+the embed cache) is built and php-lints clean but NOT uploaded.**
+
+No cache clear is needed on upload — contrary to what was assumed at the time,
+the live route answers `Cache-Control: no-cache, no-store`, so AMS Cache was
+never holding /hero-embed at all. The plugin version is part of the new cache
+key, so upgrading self-invalidates.
+
+### Embed performance — the frame was never the slider's fault (1.12.0)
+
+Measured, same box, same moment:
+
+| | TTFB | notes |
+|---|---|---|
+| WP homepage (AMS Cache) | **0.08s** | cached |
+| `/hero-embed` | **3.73s** | `no-store` — full WP boot per view |
+
+Transfer is ~250ms of that, so ~95% was WordPress booting the whole
+plugin/theme stack to answer, on EVERY view. The frame also pulled **128
+stylesheets and 27 scripts, of which 5 are Slider Revolution** — the rest being
+Vodi, MasVideos, ~60 vodi-extensions Gutenberg block styles, WPP, PhotoSwipe,
+Honeypot, Sassy Social Share, jQuery+migrate, Swiper, Select2, dashicons,
+block-library. Same root cause as the popup: `wp_head()`/`wp_footer()` hand you
+the entire site to get SR's runtime.
+
+**Fix shipped: cache the rendered frame in a per-alias transient** (10 min
+server, 5 min browser).
+
+**THE TRAP, and why AMS Cache must NOT own this:** Cache Master keys on
+`md5(<URL path>)` with no query string (Session 34). Both embed routes vary only
+by `?alias=`, so every alias would collide on ONE entry — landing pages serving
+each other's heroes, every article slider serving whichever rendered first.
+Worse than slowness. Hence our own per-alias transient plus `DONOTCACHEPAGE`,
+and `private` on the browser header so no shared proxy can store a document its
+URL path does not identify.
+
+Other decisions worth keeping:
+- **Headers are always sent fresh**, never cached, so frame-ancestors changes
+  apply instantly even while cached HTML is served. `AMS_PARENTS` IS in the HTML
+  — hence the version in the cache key.
+- **Logged-in users bypass** (admin bar + per-user nonces must not be shared).
+- **Only a plausible render is stored** (>1KB and contains `</html>`), so a
+  fatal mid-page can't pin a broken frame for the whole TTL.
+- **A slider edited in wp-admin takes up to 10 min to appear in the frame.**
+  That is the accepted price. SR writes straight to its own table, so there is
+  no reliable public save hook to purge on — a purge trigger is the follow-up if
+  editing turnaround starts to hurt.
+
+**Frontend:** `preconnect`/`dns-prefetch` to the WP origin (and to
+ads.amscloud.cc when Revive is on) from the (site) layout — both are cross-origin
+and the hero's frame is above the fold, so the handshake was on the critical
+path. Verified present in the prerendered HTML.
+
+**NOT done — the obvious follow-up:** dequeue the ~150 non-SR assets on the
+embed routes (allowlist the SR handles on `wp_enqueue_scripts` at a late
+priority). The cache makes the PHP boot free but the in-frame request waterfall
+is untouched. Needs care: SR wants sr7.css/sr7.js/tptools.js plus revicons and
+font-awesome for its nav arrows, and some addons still want jQuery — allowlist,
+verified in a browser, not a blanket strip.
+
+### Verified live after the 1.11.0 upload
+
+| | before | after |
+|---|---|---|
+| popup markers in `/hero-embed` | 83 | **0** |
+| popup markers in `/sr-embed` | — | **0** |
+| page size | 253,924 B | 224,860 B |
+| `frame-ancestors` has info.amscloud.cc | ❌ | ✅ |
+
+SR runtime confirmed intact after the hook removal (sr7.css, tptools, sr7.js,
+`sr7-module` ×5, SR7.JSON ×2, `_tpt` ×9) — the check that matters, since a
+careless removal would have stripped SR's own assets and left an empty frame.
+
+### Display ads: `public/promos/` → Revive Adserver
+
+Owner's call, and the ad server turned out to be ready and waiting. Verified
+against it before writing anything: all four zones serve, and CORS on
+`asyncspc.php` already reflects `https://info.amscloud.cc` exactly with
+`Allow-Credentials: true` — which it must, because the delivery XHR sets
+`withCredentials` and a wildcard would fail. Zone 17 was serving **Omore Milk**,
+i.e. the ad server had live campaigns the site was not showing.
+
+Zones map 1:1 onto the four existing creative sizes: 17 full landscape
+(1920×800), 18 half landscape (920×570), 19 portrait (390×660), 20 half
+landscape short (640×400). What Revive returns is the SAME shape we hosted —
+an iframe around a Slider Revolution `index.html` — so no layout rework, and
+all 14 `<AdEmbed promo={…} />` call sites are untouched.
+
+Two things that did not exist before: clicks (every local promo had
+`clickTag: ""`, i.e. rendered and did nothing) and impressions (`lg.php`).
+
+- `src/lib/revive.ts` — config + `reviveRefresh()`.
+- `src/components/ui/ReviveSlot.tsx` — the slot. Four things are load-bearing:
+  1. **Revive sizes its iframe in hard pixels**, as an attribute AND an inline
+     `style="width:1920px"`. Unchallenged that is a horizontal scrollbar on
+     mobile; only `!important` beats an inline style. Confirmed the rules
+     actually survive Panda's extractor by grepping the built CSS, not by
+     assuming.
+  2. **The async tag only scans on DOMContentLoaded** — first load and never
+     again, so every client-side navigation needs `reviveRefresh()`. Safe to
+     repeat: the script marks filled slots `data-revive-loaded` and skips them,
+     so it cannot double-count an impression.
+  3. **The `<ins>` is keyed by pathname.** article→article keeps the slot's
+     tree position, so React would REUSE the filled node, and its leftover
+     `data-revive-loaded` makes the next refresh skip it — leaving the previous
+     page's ad in place. Subtlest bug of the lot.
+  4. **Lazy is now an IntersectionObserver**, not `loading="lazy"`: Revive
+     fills every `<ins>` it can see, so the gate has to be "don't mount it yet".
+- `NEXT_PUBLIC_ADS_SOURCE=local` reverts everything without a code change.
+  **Keep `public/promos/` on disk** — that is what it falls back to.
+
+**Known trade, accepted by the owner:** these URLs cannot dodge blocklists the
+way `promos/` did — host `ads.`, path `/www/delivery/`, both squarely on
+EasyList. Blocked visitors used to see the self-hosted creative and now see
+nothing. The durable fix, if fill rate warrants it, is a neutral first-party
+delivery domain for Revive (Revive config + DNS, not frontend).
+
+### The hero iframe was booting the MSA popup (afa 1.11.0)
+
+Owner saw the MSA/Damrei popup appear inside the hero slider on localhost,
+trapped in the frame. Cause: `ams_afa_render_embed()` calls `wp_head()` /
+`wp_footer()` for ONE reason — they emit Slider Revolution's runtime — but every
+other plugin hooked there fires too, and AMS Ads Manager (`ams-msa-popup` 2.9.0)
+hooks both. So the popup ran sealed inside a 100%-wide `overflow:hidden` frame,
+unable to reach the page it exists to cover, counting impressions against a
+surface nobody could act on. **`/sr-embed` shares the renderer, so every article
+slider had it too.**
+
+Fixed by removing the two hooks in the embed renderer, not by teaching the ads
+plugin what an embed is — the route is what decides a frame carries a slider and
+nothing else, and `remove_action()` against an absent plugin is a no-op, so
+there is no coupling back. Priorities must match the `add_action()` calls
+exactly (`wp_head` 1, `wp_footer` 20) or removal silently does nothing; verified
+against all three popup variants (infotainment, economy, shared). Blanket
+`remove_all_actions('wp_head')` would be WRONG — it takes SR's own runtime with
+it and leaves an empty frame.
+
+### Also fixed: the parked blank-hero bug (Session 31 §5)
+
+`ams_afa_embed_origins()` never listed `https://info.amscloud.cc`, so production
+answered "infotainment.ams.com.kh refused to connect" and the live hero was
+blank — diagnosed and PARKED. Unparked here because the popup fix above is
+unobservable in production while the frame itself is blocked, and both ship in
+the same upload. This is why the cache clear above is mandatory.
+
+**Still open, same root cause, different plugin:** AMS3E-API's CORS
+`$allowed_origins` has the identical gap. Not touched this session.
+
+## SESSION 34 (2026-08-17): legacy-site cache refresh after publish — ams-frontend-api 1.10.0 (`web/cache/purge`) + the LegacySiteChip
+
+**✅ UPLOADED 2026-08-17 (after session): ams-frontend-api 1.10.0 is live and
+active.** Verified two ways — wp-admin → Plugins shows "AMS Frontend API 1.10.0",
+and an unauthenticated `POST wp-json/wp/v2/web/cache/purge` answers WP's own
+JSON `401 rest_forbidden` (permission callback reached) where a bogus sibling
+route falls through to the host's HTML 404. That 401-vs-HTML-404 contrast is the
+cheap remote probe for "is this route deployed" on this host, since the host
+swaps 4xx bodies. Session 33's fast-api 1.8.1 shipped in the same pass.
+
+**Why (owner request):** publishes reach the Next.js site in seconds, but
+`infotainment.ams.com.kh` itself lags until its cache TTL — a knowing side
+effect of the 1.9.0 warmer removal (Session 23), which skips ALL of AMS Cache's
+purge hooks for X-AMS-Token writes to keep a save at ~5s instead of 97s. The
+owner wants the old site refreshed too, with visible progress, **without
+touching the write path** — and the write path is indeed byte-for-byte
+unchanged; everything below happens in separate requests after a save returns.
+
+**Plugin — `POST wp/v2/web/cache/purge { post_id }` (afa 1.10.0, edit_posts):**
+restores the purge HALF only, never the preload crawl. Goes straight to the
+cache driver (`scm_driver_factory`), never through any scm_* hook. Cache
+Master's stored key is `md5(<URL path>)` — no host, query, or device variants
+(verified against the upstream source; the live fork's preload is custom but
+the key scheme is what its own read path uses). Purges the post's permalink,
+the homepage, and its categories + their ancestors (articles) or the post-type
+archive (programs); both trailing-slash key variants per URL. Answers
+`{ status, data: { driver, pages: [{ url, label, cached, purged }] } }`;
+`SKIPPED` when ams-cache is absent/off; failures are HTTP 200 + status-in-body
+(the host swaps 4xx bodies). `cached:false` just means that page wasn't in the
+cache to begin with.
+
+**Frontend — purge then re-warm, with the browser doing the counting:**
+- `src/lib/admin/cache-actions.ts` — `purgeLegacyCacheAction(postId)`, the one
+  server action, called AFTER a save succeeds, never awaited by it.
+- `src/components/admin/LegacySiteChip.tsx` — `startLegacyRefresh(postId)` +
+  the chip. The run lives in MODULE state (useSyncExternalStore, no effects):
+  create → `router.push` to the [id] editor mid-run and the chip carries over.
+  After the purge returns, the browser re-warms each purged URL itself with
+  `no-cors` fetches, two at a time (each is a full ~4s WP render on a shared
+  box — don't stampede), so the count is real work, not cosmetics, and the next
+  visitor gets a cached page. Chip: "clearing cache…" → "updating n/N" →
+  "N pages updated" (good) / "couldn't refresh" (warn — the old site still
+  updates by TTL, so this is informational, never blocking). Auto-clears after
+  60s; a save landing mid-run queues exactly one follow-up run.
+- Triggers — only when the save changed something the OLD site shows:
+  ArticleEditor (`save()` success): `res.status === "publish" || everPublished`
+  (pre-save value — covers update, unpublish, going private; never-published
+  drafts skip). ProgramEditContext (`finish()`): `status === "publish" ||
+  program.status === "publish"` (pre-save status).
+
+**Known gaps, deliberate for now:** scheduler-published posts don't purge (no
+browser; the endpoint is callable server-side from scheduler.ts with its
+service token if wanted); episode saves and trash actions don't trigger; when
+wp-admin is used directly, AMS Cache's own hooks still fire as before (slow but
+complete). Verify after upload with an Update on an already-published article —
+no need to publish anything new.
+
+## SESSION 33 (2026-08-17): media types done properly (video/audio end-to-end); a round of owner-directed UI sizing; fast-api 1.8.1 (shipped)
+
+**✅ UPLOADED 2026-08-17 (after session): ams-fast-api 1.8.1 is live, and
+correctly left INACTIVE** (wp-admin → Plugins shows "AMS Fast Read API 1.8.1"
+with an Activate link). Note fast.php reports no version of its own in any
+response and every resource is token-gated, so this one cannot be verified
+remotely the way 1.10.0 can — check the wp-admin Plugins row, or a Programs-grid
+poster URL (`-1024x…` = 1.8.1 large-first, `-300x…` = still 1.8.0 medium).
+
+**The one root cause worth remembering:** WordPress's `media_type` — core REST
+and fast.php alike — only ever says `image` or `file`. Every UI branch keyed on
+`type === "video"` was dead code. `MediaItem.type` is now derived from the MIME
+root in src/lib/admin/media.ts (`kindFromMime`), which fixed both grids, the
+drawer and the picker in one move — no plugin change needed.
+
+**Video/audio, end-to-end** (owner: "I don't think we have video and audio
+implemented correctly yet" — they were right):
+- The editor.MediaUpload bridge now FORWARDS each block's `allowedTypes`;
+  MediaPicker gained a `kinds` prop (default image-only). An Image block can no
+  longer take an mp3 (that produced broken img blocks in a draft — delete and
+  re-insert those); the Video/Audio blocks get type-locked pickers with proper
+  titles; only the File block sees every tab.
+- Tiles: video renders its own first frame (`preload="metadata"` + `#t=0.1`
+  for Safari, play badge) in BOTH grids; audio gets an icon card (new `music`
+  icon). The Media drawer now hosts real `<video controls>` / `<audio controls>`
+  players.
+- Uploads accept video (≤300MB, 10-min timeout) and audio (≤50MB) through the
+  same route; per-type caps in src/lib/admin/upload.ts. NOT yet live-tested —
+  and the HOST's PHP `upload_max_filesize` is unknown and wins regardless: a
+  413 means aaPanel config, not code.
+
+**Owner-directed sizing pass, all verified in their browser:**
+- Articles table thumbs 80→40px; Menus icon cell 40×40 square-cornered, icon
+  fills the box.
+- Menus page: the menu dropdown REMOVED — the screen is pinned to
+  PROGRAM_ICON_MENU (MenusScreen hardwires the slug; the BFF still accepts
+  ?menu=, so restoring a picker is UI-only).
+- Categories dialog (ArticleEditor): family blocks now sort by total post
+  count, not the Khmer alphabet — ព្រឹត្តិការណ៍ leads. The rail keeps WP order.
+- The Gutenberg sheet has a full-viewport min-height (calc(100vh - 176px)).
+- Yoast metabox: the Google preview renders the featured image as Google's
+  right-side thumbnail (104px mobile / 92px desktop), live with editor state.
+- Programs LIST view: the thumb COLUMN was 66px with 22px-a-side Td padding, so
+  the global `img { max-width: 100% }` reset crushed every poster to a ~22px
+  sliver regardless of the img's own size — two invisible "fixes" before the
+  column was found. Now 140px column, 96×54 art, 15.5px titles. GRID view went
+  16:9 → 4:3 → 1:1 (square art).
+- Poster sharpness: the grid renders bigger than medium's 300px, so medium
+  upscaled = blur. REST path prefers `large`; fast.php 1.8.1 resolves posters
+  `large → medium → full` (chain tests added; the fallback behaviour was
+  already in ams_fast_attachment_url).
+
+## SESSION 32 (2026-08-16): fast-api 1.8.0 "Today so far" + moderation queue; the dashboard's design pass (chart re-encoded, header band deleted)
+
+Same-day continuation of Session 31, all owner-directed. The screen iterated
+hard: Needs-you moved INTO the greeting cell (the "Across the newsroom"
+MiniStats deleted as redundant), the two KPIs STACKED beside it splitting its
+height, Recent activity briefly took the third column (Last-edited column
+dropped, then its gray header band deleted — GhostTh kept the <th> semantics
+at zero pixels), a 70:30 chart/lists row was tried and REVERTED, and finally
+Recent activity was cut from the screen entirely. Who's publishing is also
+cut. Both still arrive in the payload; restoring either is UI-only.
+
+**The chart was re-encoded** (charts.tsx): daily BARS could never fit a
+variable-width panel (gappy at full width, slivers at 90 days — the owner
+called it "off" and was right). Views is now a monotone-cubic curve
+(Fritsch–Carlson — smooths rendering, cannot invent peaks) with a gradient
+area fade; posts is a CONTRIBUTION-STYLE STRIP: one cell per day, contiguous,
+intensity = count, zero days faint rather than absent. Both encodings are
+continuous so no width can break them. TrendPanel gained a `height` prop that
+scales the anatomy proportionally (156:20:24, axis row fixed); TREND_H=320.
+
+**fast-api 1.8.0** (built, zip rebuilt, tests 240/240 — NOT yet uploaded at
+session end): dashboard payload gains `today` — views since midnight vs
+yesterday UP TO THE SAME CLOCK TIME (the honest partial-day comparison only
+direct SQL can make; 120s memo, `postsToday` outside the memo for
+read-your-writes), plus most-read of the last hour — and `queue.comments`
+(comment_approved='0' count, moderate_comments-gated). Frontend renders
+"Today so far" in the third cell (falls back to "Needs fast-api 1.8.0" until
+the upload). A Needs-you moderation row (deep-link to wp-admin's
+edit-comments.php) was built and then PARKED by owner decision — the JSX is
+commented in DashboardScreen with re-enable instructions; the data keeps
+flowing. REST fallback: today null, comments 0 — no REST equivalent of
+same-time-yesterday exists. 1.8.0 UPLOADED and verified live this session
+(Today so far confirmed populating; diag healthy).
+
+**1.8.0 also ships CUSTOM chart windows** (owner request, WPP-stats-style):
+`?from/?to` (Y-m-d, inclusive) override `?days` for the series, top list and
+leaderboard; `ams_fast_custom_range()` clamps `to` at today and the span at
+90 days (the 57s probe), refuses impossible dates instead of "repairing"
+them, and an unusable pair falls back to the preset. KPI cards stay pinned to
+7-vs-prior-7 ending TODAY via their own 14-day mini-series — a historical
+window cannot feed a card that says "last 7 days". Frontend: `DashRangeSpec`
+(preset | {from,to}) runs through queries → BFF → readDashboard; a Custom
+button + date-pair popover sits beside the Segmented control; KPI sparklines
+hide on custom windows (the series is the past, the KPI is the present); the
+REST fallback degrades custom to the 30-day preset with `custom: null` as the
+tell. And the range-flip loading state is now SCOPED: only the trend chart
+dims (`stale`), the rest of the screen keeps its range-independent data live
+— the whole-screen dim was the wrong altitude.
+
+Design artifacts from the session (claude.ai): "Row One, Three Ways" and
+"The Morning Screen" — the full-screen proposal the iterations drew from.
+
+## SESSION 31 (2026-08-16): fast-api 1.7.0 `trending` + the dashboard's bottom band recomposed (Trending now beside Top performing)
+
+Owner-directed layout change, dashboard only: Who's publishing moved UP into
+the Traffic & publishing panel (chart 1.9fr, leaderboard 1fr — the split the
+old panel 3 used; own-scope users get the chart full-width), and panel 3 is
+now **Top performing + Trending now at 50/50**.
+
+**fast-api 1.7.0** (uploaded and live same session): the dashboard payload
+gains `trending` — the top-5 WPP ranking again, over a **fixed 24-hour
+window** computed on the site clock. Momentum, not standing: it deliberately
+ignores the range control (one cache key, `wpp:trending24:v1`, same 5-min
+memo), and the two lists may overlap. The ranking SQL and the outside-the-memo
+name resolution were factored into shared helpers (`ams_fast_wpp_ranked`,
+`ams_fast_wpp_attach_names`) so `top` and `trending` cannot drift. Null
+contract preserved: no summary table → `trending: null` → the frontend pays
+WPP REST with `range=last24hours`; the frontend's `== null` check also covers
+a pre-1.7.0 plugin that omits the field entirely. Offline tests 227/227,
+zip rebuilt.
+
+Frontend: `trending: TopPost[]` on `DashboardData` (both paths — the REST
+fallback fetches it as a tenth parallel call), `fetchTopRest` parameterized by
+WPP range keyword, and the ranked-row markup extracted into `RankedRows`
+shared by both panels (share rule relative to each list's own leader). The
+session also absorbed the owner's in-progress restyle of DashboardScreen
+(flat panels, rule-separated) — layout edits preserved it.
+
+## SESSION 30 (2026-08-16): v2.8.0+v2.8.1 — the "Show both" overlap fixed by making the trailer wait for the lead to CLOSE (v2.8.1 LIVE + verified)
+
+**Nothing touching the Next.js site.** Work on `main` (the feature branch
+merged); source still `docs/wordpress/ams-msa-popup/`.
+
+The session opened with deploy news: **v2.7.0 is LIVE on infotainment**
+(user uploaded it, set Desktop zone 93, flipped "How to split" to Show both
+mid-session — the first live check found the page still baking
+`rotation:"alternate"`, i.e. the dropdown hadn't been switched; after the
+switch + AMS Cache purge the bake read `"both"`). The ~33% fill-rate
+question for MSA is parked by user decision.
+
+Then the user's report: "the second popup fire immediately after the first
+one, so they overlap." **Confirmed on the live site** with a CDP headless
+Chrome watcher (mobile UA, console events + 250ms visibility polling):
+Damrei-lead pageviews stacked both popups 4.1→8.7s, MSA-lead 4.1→6.5s. The
+v2.7.0 trailer was a +3s timer FROM PAGE LOAD — blind to Damrei's ~2.8s
+auction and to both popups' ~5–6s auto-closes; nothing waited for anything.
+
+**v2.8.0** (README §19, the full record):
+
+- Trailer is now CLOSE-TRIGGERED: wait for the lead to appear (per-lead
+  no-show deadlines — Damrei 8s, MSA 13s because MSA's verdict is only
+  final after its ~12s retry), wait for it to disappear (reader X or
+  auto-close), breathe, fire. Lead still up at 30s → trailer skipped.
+- New "Breather between popups" setting (default 2s) — user asked whether
+  the gap should be longer; the answer that stuck: the gap isn't where the
+  disturbance comes from, don't pay reach for it.
+- New "Show both on" setting, DEFAULT 'first' — both popups only on the
+  visit's first pageview (sessionStorage), later pageviews take turns one
+  popup each. Owner-approved behaviour change on upgrade (the real
+  audience-pressure lever: five articles = 6 popups now, not 10).
+  Rollback: set it to 'every'.
+
+Verified with a WP-stub PHP harness emitting the REAL generated output +
+headless-Chrome runtime stubs replaying the measured live timings — all four
+scenarios (both leads, no-show, first-pageview scope across two navigations
+in one tab) sequential with zero overlap.
+
+**v2.8.1 addendum (same day): the user uploaded v2.8.0 and the live re-check
+caught a miss the harness couldn't** — Damrei-lead pageviews never fired the
+MSA trailer. Live DOM probe: the PTO container holds only Gamma's `<script>`
+tags in a 0-wide box, permanently, while the takeover renders in a separate
+anonymous overlay div — so `damreiPopupVisible()`'s container test was
+always true and the close-watch never saw Damrei leave (trailer skipped at
+the 30s ceiling). v2.8.1 measures rendered creative children instead
+(script/style skipped, >10×10 box); side effect, deliberate: the v2.3.0
+`fb_msa` backfill judgement was blinded the same way since it shipped and
+now works — expect `fb_msa` in the stats for the first time. Harness stub
+now replicates the live container so this can't slip through again (README
+§19.1). Zips rebuilt at v2.8.1, **uploaded same day and VERIFIED LIVE in
+both orders on the HOMEPAGE** (Damrei-lead: takeover 2.3→8.6s, second-msa at
+10.5s, MSA 10.7→16.2s; MSA-lead: MSA 1.9→7.1s, second-damrei at 9.3s,
+takeover 9.6→15.9s; visit's second pageview single-popup).
+
+**v2.8.2 addendum (same day, README §19.2): the homepage pass hid an
+ARTICLE-page failure** — user: "every MSA lead, i do Damrei popup but when
+Damrei lead, i don't see MSA." The articles-only underlays render permanent
+full-screen fixed clips (`#damrei-inner-clip-content-*`, z-99998) that the
+big-overlay scan counted as Damrei's popup, so on Damrei-lead article
+pageviews the close-watch never released the MSA trailer
+(`second-skipped` at 30s, reproduced live). Structural fix: the clips are
+descendants of their zone container while the takeover is body-level, so
+the popup-visibility scan now skips everything inside non-popup zone
+containers (`damreiOtherCodes` baked; logging scan untouched). Verified in
+the article-replica harness with the underlay on screen throughout. The
+probe also yielded the long-open §7.1 underlay signature —
+`[id^="damrei-inner-clip-content"]` — ready to paste into section 4.
+User decision the same session: "Show both on" flipped to EVERY pageview
+(they want the sequence on all articles, reversing the 'first' default).
+
+**v2.9.0 addendum (same day, README §20): both-sided stats + neutral
+wording**, user request before uploading v2.8.2 ("track Damrei stats as
+well... more general so normal users can use it without my presence").
+Damrei counters (dam_win/dam_fired/dam_shown, device-split), the pageview
+OUTCOMES table (both / only MSA / only Damrei / neither, judged at
+page-leave — the owner's-eye headline), Damrei mobile/desktop tables with
+fill rate, section-2 relabelled "Pageview split — MSA _% / Damrei gets the
+rest" (same option keys), footnotes network-neutral. Counting+wording only.
+Verified: stub-render screenshots + beacon spy in the runtime harness
+(Damrei-lead flushes dam_win/dam_fired/dam_shown/fired/filled/both; MSA-lead
+the mirror). Zips at **v2.9.0** (carrying the v2.8.1+v2.8.2 fixes).
+
+**END-OF-SESSION STATE: v2.9.0 LIVE ON BOTH SITES, user-verified**
+("everything is working amazing") and confirmed in served HTML
+(`damreiOtherCodes` + `bothScope` baked on both). Both sites run "Show
+both" on EVERY pageview with the 2s breather; the underlay selector
+`[id^="damrei-inner-clip-content"]` is pasted on both (verified identical
+markup on economy before recommending). Damrei/outcome stats are filling
+from upload time.
+
+**Damrei desktop popup audited (same day, user report "rarely shown on
+desktop"): CONFIRMED THEIR SIDE.** CDP network tap, fresh desktop visitors,
+Damrei-lead pageviews: our page defines the PTO Desktop zone and Gamma's adx
+receives the request every time — and answers **HTTP 204 No Content on 4/4
+runs on infotainment (zone 1739240031) and on economy (zone 1739329474)**,
+while the same machinery fills on mobile. No desktop takeover
+campaign/budget is being served to these zones — question for Damrei
+ad-ops, nothing to fix in the plugin. (The sequencing degrades gracefully:
+lead no-show → MSA fires at the 8s deadline, so desktop pageviews aren't
+wasted.)
+
+## SESSION 29 (2026-08-14): plugin v2.6.0 + v2.7.0 — tabs, scope removed, and the "Show both" split mode (zipped not uploaded)
+
+**v2.7.0, same session (README §18):** user wants both popups on every
+pageview with the LEAD alternating and the second firing 3 s after the lead.
+Built as a third "How to split" choice (`rotation='both'`) — old modes
+untouched, rollback = switch the dropdown back, 'alternate' stays default so
+upgrading changes nothing by itself. Referee flag now means "who leads" in
+this mode; Damrei-lead → footer delays MSA 3 s; MSA-lead → footer calls the
+existing `AMS_LATE_DAMREI()` backfill hook at +3 s (with a 500 ms poll up to
+12 s since gaxpt creates the hook at window load). Backfill is ignored in
+this mode (fb_* paths gated off). "Roll wins" = pageviews MSA led. Verified
+with a headless-Chrome runtime simulation of the real generated output:
+Damrei-lead → MSA injects at ~3016 ms; MSA-lead → held-back PTO defines at
+~3020 ms. Zips rebuilt, NOT uploaded; preview artifact updated in place.
+
+The v2.6.0 part:
+
+**Nothing touching the Next.js site.** Branch `feat/msa-popup-plugin`.
+
+The queued second design pass on Settings → AMS Ads (README §17):
+
+- **Settings | Stats tabs** under the always-visible status box + warnings.
+  Hash-driven (`#stats`), client-side only — a save reloads without a hash
+  and lands back on Settings with the saved notice in view.
+- **"Desktop popup pages" (`desktop_categories`) removed** end to end:
+  default, sanitize, field, `ams_msa_popup_desktop_scope_ok()` and its bakes
+  in the head referee, footer config and front-end JS. Verified first (the
+  follow-up SESSION 28 queued): both live sites bake `desktopScopeOk:true`
+  into their pages, so both were already site-wide — removal is
+  behavior-neutral, and the desktop popup simply runs site-wide when its
+  share is above 0. One cache-baked trap gone.
+- Zone-table footnote: the Name column is label-only, never sent to Gamma.
+
+Verified with the §16 stub-harness recipe (headless Chrome: Settings tab,
+Stats tab, all-warnings scenario). Both per-site zips rebuilt, NOT uploaded —
+live remains infotainment v2.3.1 / economy v2.4.1. Preview artifact updated
+in place (same URL as SESSION 28's).
+
+## SESSION 28 (2026-08-13): plugin v2.5.0 — the Settings → AMS Ads screen revamp (UI-only, zipped not uploaded)
+
+**Nothing touching the Next.js site.** Branch `feat/msa-popup-plugin`.
+
+The user's verdict on the settings screen: "very confusing, doesn't have
+proper structure, some stuff are wrong wording... it's a mess" — it had grown
+organically v1.0→v2.4 as one flat table interleaving five concerns, with
+field descriptions written like a changelog. v2.5.0 rewrites
+`ams_msa_popup_settings_page()` ONLY: no option key, default, sanitize rule,
+stats counter or front-end byte changed — upgrading a live site is safe and
+changes nothing publicly.
+
+What the screen is now:
+
+- **Status box on top**: what the plugin is doing right now (MSA popups,
+  Damrei serving, split mode, backfill), derived from saved settings, plus
+  red warnings for the combos that have burned us — Damrei serving OFF while
+  the no-Gamma header is live (the economy ad-dark deploy), desktop popup on
+  with "one winner" off (the §13.5 stacking), suppress mode with an empty
+  selector list. Standing "purge AMS Cache after saving" note.
+- **Four numbered sections by intent**: 1 MSA popups · 2 splitting pageviews
+  · 3 Damrei zones · 4 checks & counting. Descriptions cross-reference
+  sections by number.
+- **Plain wording**: referee → "one winner", no-fill fallback → "backfill
+  empty pageviews", underlay detection → "Damrei overlap check", rotation →
+  "how to split" (take turns / random draw); zone-table columns renamed
+  (Popup slot, Make container, Shows on). Version-history prose moved out of
+  descriptions into the plugin header + README.
+- **Dependency greying**: rows carry `data-needs="msa|gamma"`; a small
+  inline script dims them while their master switch is off. Deliberately
+  visual-only (opacity) — inputs are never `disabled`, so toggling a master
+  can't lose saved values on submit.
+- Day-by-day stats tables collapsed into `<details>`.
+
+Verified by rendering the real function locally (WP-stub harness in the
+session scratchpad → headless Chrome screenshots) in a live-like scenario and
+a "danger" scenario: warnings, greying and layout all behaved. Live state
+unchanged: infotainment v2.3.1, economy v2.4.1.
+
+**v2.5.1 addendum (2026-08-14):** MSA sent a PC tag "specific for
+Infotainment" — `revive-popup-pc.js?v=12` data-zone **93**, superseding the
+"desktop 89 shared" note from 2026-08-13 — then resent all four tags,
+CONFIRMING the full map: mobile `revive-popup.js?v=7` zones 94/90, desktop
+`revive-popup-pc.js?v=12` zones 93/89 (infotainment/economy). v2.5.1 seeds
+desktop_zone by site like mobile; seed-only, so live infotainment
+additionally needs Desktop zone = 93 typed into its settings + AMS Cache
+purge (economy's live 89 is already right, no change there). Both zips
+rebuilt at v2.5.1 (zipped, NOT uploaded).
+
+## SESSION 27 (2026-08-13): the Economy ads package — plugin v2.4.0 + economy no-Gamma header, built not deployed
+
+**Still nothing touching the Next.js site.** Branch `feat/msa-popup-plugin`.
+Note first: the 2026-08-13 sessions between this and Session 26 (plugin
+v2.0.0 through v2.3.2 — the referee-in-plugin rework, the desktop referee,
+alternation, and the §14 root-cause of Damrei's dead mobile delivery) never
+got log entries; their record lives in `docs/wp-ads/README.md` §13–§14 and
+the status blocks at its top.
+
+This session built **the Economy package** (README §15): bringing the same
+ads setup to **economy.ams.com.kh**, which MSA's "try it on Economy" turned
+out to mean. Source of truth was the economy theme export
+(`docs/wp-ads/themes.tar.gz`): its vodi-child has NO header override, so the
+parent `vodi/header-v3.php` serves the live Gamma stack — same siteIds as
+infotainment, its own underlay/PTO/footer zone ids, and all the same theme
+bugs (dead Footer Desktop define, bgColor XSS, no underlay divs, dead
+commented pop block). Bonus finding: the long-mistrusted
+`docs/wp-ads/header-v3.php` "trap" file matches economy's pixel/Metricool/
+Dailymotion — it was an old ECONOMY backup all along (README §1 updated).
+
+What shipped (built + zipped, NOT uploaded — economy wp-admin/aaPanel access
+still unconfirmed):
+
+- **Plugin v2.4.0→v2.4.1** (one SOURCE, two per-site zips): the zone seed and
+  the desktop-category-scope default pick per site —
+  `ams_msa_popup_is_economy()` seeds economy's nine zones (contract flags
+  pre-applied: underlays autodiv+articles-only+mobile, PTOs popup-flagged
+  per device) and an empty desktop scope. Saved settings beat seeds, so the
+  live infotainment install doesn't move on upgrade. The §14 upgrade routine
+  now recognises both sites' zone ids (gate bumped, idempotent). **v2.4.1
+  (same day, user request — "I feel more comfortable having 2 plugins"):**
+  the build script now emits `ams-msa-popup-infotainment.zip` and
+  `ams-msa-popup-economy.zip` from the one source, each with the site PINNED
+  at build time (`AMS_MSA_POPUP_SITE` injected at the `@AMS_SITE_PIN@`
+  marker) — deterministic seed per zip, host check demoted to fallback.
+  Verified in a PHP harness: each zip keeps its own seed even on a wrongly
+  configured domain. Both zips keep inner folder `ams-msa-popup/` — the WP
+  identity; renaming it would orphan infotainment's live settings/stats. The
+  `ams-msa-popup-<site>/` folders in docs/wordpress/ are GENERATED output
+  (README.txt inside says so) — edit only `ams-msa-popup/`.
+- **`docs/wp-ads/economy-vodi-child-header-v3-nogamma.php`** — economy's
+  no-Gamma child override, identical treatment to infotainment's (§13):
+  Gamma blocks stripped, XSS fixed, video in-view kept byte-identical.
+  Rollback = delete the file. Pristine parent copy kept as
+  `docs/wp-ads/economy-header-v3.php`.
+
+Deploy runbook + verify + the zone table are README §15.
+
+**DEPLOYED TO ECONOMY the same day (2026-08-13, user-driven):** plugin
+v2.4.1 uploaded + activated on economy.ams.com.kh (zone table verified
+showing economy's ids — the pin worked), no-Gamma child header created in
+economy's `vodi-child/` via aaPanel (www/644; economy had no override before,
+so rollback = delete the file), **Serve Damrei zones ticked** (after a catch:
+the user had deployed the header first with the box still unticked — an
+ad-dark window on uncached views until the box was ticked), AMS Cache purged
+(economy runs AMS Cache too). MSA then answered the open zone question with
+economy-specific tags: **mobile zone 90** (`revive-popup.js?v=7`), **desktop
+zone 89 shared** (`revive-popup-pc.js?v=12`) — user to set Mobile zone 90 +
+Enabled + both shares 50 in economy's settings. **v2.4.2** (zipped): the
+mobile-zone DEFAULT is now site-aware (90 on economy, 94 on infotainment) —
+seed-only, live installs keep saved fields. Still pending: infotainment's
+upgrade to the v2.4.x zip (delivers v2.3.2 articles-only).
+
+**Still nothing touching the Next.js site.** Branch `feat/msa-popup-plugin`.
+Two versions had shipped after Session 25's entry without a log entry — recap:
+**v1.2.2** preloads the sknteam Revive loader in parallel with MSA's script
+(removes a sequential fetch from MSA's 3.5s window; MSA's own loader check sees
+ours and skips duplicating). **v1.3.0** retries once when the 6s fill poll
+times out — MSA's no-fill cleanup resets `__MSA_REVIVE_POPUP_ACTIVE__`, so a
+second injection is legal, and with everything warm it nearly always beats the
+3.5s deadline (new `retry` counter, `nofill` now means both attempts failed).
+
+**The plugin is uploaded, enabled, and LIVE.** First two days on the stats
+screen (user's screenshot): 08-11 pv ~490 / fired 255 / shown 115 (45%);
+08-12 pv ~730 / fired 519 / shown 142 (27%). Roll wins = fired on both days
+(cap off, as configured). **The ~33% fill rate is MSA's server declining —
+that number goes to MSA** (README §7.2: campaign cap? pacing?). The day-2 drop
+45%→27% smells like a daily budget exhausting earlier; watch it.
+
+**Underlay seen / Overlap are 0 for a mechanical reason**: the Damrei CSS
+selector is still unconfigured, so `findUnderlay()` can never match — not
+evidence of no overlap. The user SEES both popups on real pageviews: MSA ~1s
+(we made it fast to beat its own deadline), Damrei ~2–3s (Gamma auction round
+trip — why the detect delay is 2500ms). Next concrete step unchanged: grab the
+`AMS_POP underlay-check` candidates from the console while Damrei is up, paste
+the selector into Settings → MSA Popup.
+
+Rest of the session was a mechanics walkthrough for the user (how the plugin
+works end to end), which settled one design question for the record: **a true
+MSA/Damrei 50/50 is impossible from the plugin** — Damrei fires unconditionally
+from the theme head first, and hiding it after the fact still bills the
+impression. The roll is MSA-vs-nothing; plugin-side ceiling is suppress mode.
+The would-be theme edit (a `window.AMS_POPUP_WINNER` coin flip in the head
+gating only the two underlay `defineZone` calls) is written up as **README
+§12** in case aaPanel access ever materialises.
+
+## SESSION 26 (2026-08-11→12): Yoast under the article, English slugs enforced, the rail goes wp-admin
+
+### 1. Yoast-style SEO, in two homes
+
+`YoastMetabox` (shared, `components/admin/seo/`) renders under the document in
+the editor (GutenbergEditor's `belowDocument` slot — wp-admin's anatomy) AND in
+an SEO workbench at `/admin/seo` + `/admin/seo/[id]` with a meta-only save
+action (`lib/admin/seo-actions.ts`). **The workbench's sidebar item was
+REMOVED on the owner's call** — the metabox covers the day-to-day; the screens
+still exist by URL, restore the nav entry the day a bulk pass is wanted. The
+public site now honors the Yoast SEO title (`seoTitle` in mappers +
+generateMetadata, `%%var%%` guard). Also: AMS logo lockups + SVG favicon, and
+the sticky-sidebar fix (`overflow-x: clip` in globals.css).
+
+### 2. Slugs: the newsroom's convention, now enforced
+
+**Finding (checked on live posts): Khmer titles, hand-written ENGLISH slugs
+throughout** — WordPress would percent-encode Khmer into a giant unreadable
+URL. The editor now makes that convention structural:
+
+- Slug editable in the metabox **until first publish**, then locked forever
+  (a live URL is never rewritten; no redirects exist). `everPublished` state,
+  echoed slug from WP after save.
+- The field **rejects non-English at the keystroke** (lowercase/digits/hyphens;
+  spaces→hyphens; Khmer never lands).
+- **Publish (or publish-privately) with an empty slug is BLOCKED** — snackbar
+  warning, scroll+focus to the field. Draft/pending saves stay free.
+
+### 3. The Post rail speaks wp-admin
+
+The inline status dropdown + password field + sticky checkbox became **one
+"Status" summary row** opening a "Status & visibility" popover (radio list with
+descriptions, password + sticky checkboxes inside; no Scheduled — the cron
+footnote moved in there). A "Show all N categories" link opens a dialog of
+**family blocks** — one bordered block per parent-with-children, childless
+roots pooled under "No subcategories"; same `checked` state as the rail, so
+ticks sync live.
+
+### 4. Programs list polish
+
+Newest first (sorted by id desc in `readPrograms` — the fast path has no date
+field), square card/image corners (grid only), and the pill hugs the title
+(the reserved two-line `minHeight` was the perceived gap, not the margin).
+
+### Verification pattern that worked here
+
+Chrome over CDP with the standing `C:\chrome-debug` profile, raw WebSocket (no
+chrome-remote-interface install). Two tricks worth keeping: **autofill
+credentials submit fine if the CLICK is a trusted CDP Input event** (JS reads
+of the value stay empty until a gesture), and **`Fetch.enable` + fail-all-POSTs
+is the safety net** that lets you click Publish against live WP to test a
+client-side guard — this session's guard test attempted zero requests.
+
+## SESSION 25 (2026-08-11): the MSA popup plugin — built, zip ready, not yet uploaded
+
+**Still nothing touching the Next.js site.** Session 24's design got the
+go-ahead and became code, on branch `feat/msa-popup-plugin`:
+
+- `docs/wordpress/ams-msa-popup/` — the plugin (`ams-msa-popup.php` +
+  `uninstall.php`), v1.0.0, Author: Soth Kimleng.
+- `docs/wordpress/ams-msa-popup.zip` — upload via Plugins → Add Plugin → Upload
+  on `infotainment.ams.com.kh`.
+
+What it does: Settings → MSA Popup (enabled off by default / script URL / zone /
+mobile share 100 / desktop share 0 / cap 6h / underlay mode off·log·suppress /
+underlay CSS selectors / debug), one `wp_footer` inline script that rolls
+client-side (page cache), reuses the theme's mobile regex, injects MSA's tag
+when it wins, stamps the frequency cap **only when the ad actually fills**
+(iframe poll — no-fill doesn't burn the window), plus the CSS that neutralises
+`ads.js`'s transform inside both `#msa-revive-popup-ad` and
+`#msa-revive-pc-popup-ad`.
+
+**The underlay stub:** detection ships in log-only mode with the Damrei
+signature as a *setting* (selector lines). While empty, every checked pageview
+logs `AMS_POP {event:"underlay-check", candidates:[…]}` — the README §7 console
+snippet, automated. Collect the recurring candidate, paste its selector into
+settings, later flip mode to suppress. No redeploy at any step.
+
+**Post-build amendment (same day, v1.1.0):** the user replaced the 6-hour cap
+with a **50% roll per mobile pageview, no cap** (defaults now: mobile share 50,
+cap 0; cap machinery kept, set hours > 0 to re-arm). Explained to the user and
+recorded in README §6.9: the plugin cannot impose 50% on Damrei — Damrei fires
+from the theme's head at Gamma's own rate. MSA rolls independently; overlap
+pageviews stack (MSA on top) until the underlay signature is collected and
+suppress mode goes on.
+
+**v1.2.0 (same day): the stats screen.** The user asked "where can I see the
+UI?" — the tracking UI discussed earlier got built. Top of Settings → MSA Popup
+now shows Today / Yesterday / 7d / 30d plus a 14-day table: pageviews (sampled
+1-in-10, shown ×10), roll wins, fired, shown, fill rate, closed-by-reader vs
+auto-closed, underlay sightings, overlap. Fed by ≤1 `navigator.sendBeacon` POST
+per pageview (flushed on pagehide/hidden, deltas only) to REST
+`ams-msa-popup/v1/e`, whitelisted+clamped, atomic `INSERT..ON DUPLICATE KEY
+UPDATE` into `{prefix}ams_msa_popup_stats` (day,event,cnt — no per-visitor
+data). Reader-close vs auto-close inferred from overlay lifetime (<4.6s = ✕/Esc;
+MSA auto-closes at 5s). Stats toggleable; uninstall drops the table.
+
+**v1.2.1 (same day): the 0%-fill fix, found on the first live test.** Stats
+showed Fired 6 / Shown 0. Diagnosis (README §4, new top section): MSA silently
+swapped the `?v=7` build again (7386→7430 bytes, overlay now hidden until a
+creative confirms); their rescan fallback `reviveAsync.push({})` throws on any
+Revive-running page; and sknteam's async loader only scans immediately at
+readyState "complete" — otherwise it waits for DOMContentLoaded (already gone
+when our footer injects) or window load (seconds away on this heavy page),
+while MSA self-destructs at 3.5 s. Zone 94 itself serves the Angkor 320×600
+fine on both delivery endpoints. Fix: after injecting MSA, the plugin polls for
+the sknteam loader and calls `reviveAsync[id].apply(detect())` itself —
+idempotent (detect marks `data-revive-loaded`), revive-id read off MSA's own
+`<ins>`. Also learned: the Wing Bank takeover the user sees is the Damrei
+underlay; `script.js?ver=1.1` console noise ("Ad iframe is not loaded!") is a
+different ad script, not ours.
+
+Next: upload the zip, configure, enable, run the README §11 verification.
+As-built details in `docs/wp-ads/README.md` §9.
+
+## SESSION 24 (2026-08-11): the MSA popup — a WordPress-side ads task, designed not built
+
+**Nothing in this entry touches the Next.js site.** The target is the legacy
+WordPress site `https://infotainment.ams.com.kh`. MSA handed over a popup tag
+(`revive-popup.js?v=7`, `data-zone="94"`, Angkor Beer, mobile-only) and the task
+is to add it alongside the ads already running there.
+
+**Full handoff lives in `docs/wp-ads/README.md`** — the ad stack as measured, the
+MSA script's complete behaviour, the ten locked decisions, and what's still open.
+Read that before continuing. This entry is the short version.
+
+**Status: designed, no code written.** The user had not given the go-ahead.
+
+### The three things that matter most
+
+1. **The ad stack is entirely hand-pasted into the child theme.** No ad plugin,
+   no ad manager. Gamma Platform ("Damrei") declares nine zones in
+   `header-v3.php`'s `<head>`; AMS's own Revive (`ads.amscloud.cc`) fills `<ins>`
+   blocks pasted into post content; MSA delivers from a third Revive
+   (`sknteam.com`).
+
+2. **An early conclusion in the session — "no popup is running" — was WRONG, and
+   the method was the problem.** It searched fetched HTML for placeholder
+   `<div>`s. Gamma's Underlay format (`1721642630` / `1722239706`, 640×1386)
+   **injects its own container at runtime**, so a static `curl` can never see it.
+   The user corrected it from their own browser. **Never conclude an ad is absent
+   from static HTML.**
+
+3. **It ships as a plugin, not a theme edit.** The host's standing rule is no file
+   editing from WordPress — server changes go through aaPanel, which the user
+   doesn't have. A plugin zip upload is a normal admin action and sidesteps the
+   rule entirely; deactivating it is the undo. A file-manager plugin was suggested
+   earlier in the session and then **withdrawn** — host forbids it, and the
+   `editor` role here has 118 caps including `manage_options`.
+
+### Also captured in the handoff
+
+- `docs/wp-ads/header-v3.php` is a **trap**: an old backup from a *different
+  site* (different Meta Pixel, Metricool hash, Dailymotion token). Not an older
+  revision. Never merge from it. The live file is `info-header-v3.php`.
+- `?v=` on the MSA URL is a **pure cache-buster** — verified byte-identical across
+  values. They can change the script's behaviour any time, which is why the URL
+  and zone belong in plugin settings.
+- The theme's `ads.js` will **shrink the MSA creative** — it scales every
+  `ins[data-revive-zoneid]` and its `!important` rules don't cover `transform`.
+  Fixable with plugin CSS; no `ads.js` edit needed.
+- Two pre-existing theme bugs found in passing: the Footer Desktop zone is defined
+  outside `gammatag.cmd.push()` and never `sendRequest()`-ed, and line 216 echoes
+  `$_COOKIE['bgColor']` unescaped into a style attribute (reflected XSS).
+
+### Open before building
+
+The Damrei underlay's DOM signature (console snippet is in the handoff), and three
+questions for MSA — frequency cap, booked impression target, whether the `-pc`
+build is retired.
+
+---
 
 ## SESSION 23 (2026-08-10): off Vercel onto Dokploy, and the write slowness SOLVED
 

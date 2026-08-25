@@ -39,8 +39,6 @@
  * and leaderboard, while the KPI cards stay pinned to 7-vs-prior-7 ending
  * today via their own mini-series. 1.8.1: program posters resolve large-first
  * (large -> medium -> full) so the admin grid stops upscaling the 300px medium.
- * 1.8.2 retains Economy's `secondary-nav-v3-menu` alongside the shared AMS
- * menu slugs, so the public header can read its current program-icon strip.
  * Gates: users + roles require list_users; media requires edit_posts;
  * settings requires manage_options; programs/program/episode require the
  * (derived) program caps; profile is always the token's own user.
@@ -81,7 +79,7 @@
  * IMAGES — the one genuinely awkward part
  * -----------------------------------------------------------------------------
  * Media on this site is offloaded to S3 (KH Offloader -> https://s3.ams.com.kh,
- * bucket "economy", path-style, no path prefix, no file versioning). WP
+ * bucket "infotainment", path-style, no path prefix, no file versioning). WP
  * REST returns S3 URLs only because the offloader FILTERS them at runtime —
  * and filters do not run here.
  *
@@ -141,7 +139,7 @@ if ( ! defined( 'AMS_FAST_DIAG_TOKEN' ) ) {
 /** KH Offloader -> Custom Domain (CDN URL), verbatim, no trailing slash.
  *  Override in wp-config.php if the bucket or domain ever changes. */
 if ( ! defined( 'AMS_FAST_CDN_BASE' ) ) {
-	define( 'AMS_FAST_CDN_BASE', 'https://s3.ams.com.kh/economy' );
+	define( 'AMS_FAST_CDN_BASE', 'https://s3.ams.com.kh/infotainment' );
 }
 
 /** Object-cache group + a version prefix. Bump the version to invalidate every
@@ -3512,8 +3510,6 @@ function ams_fast_res_pub_programs() {
  *  public site has no business reading arbitrary menus by name. */
 function ams_fast_public_menus() {
 	return array(
-		// Economy's current program-icon strip (មាតិកាឌីជីថល).
-		'secondary-nav-v3-menu',
 		// The program-icon strip under the main nav (មាតិកាឌីជីថល).
 		'ams-infotainment-third-menu',
 		// Registered for the same strip on mobile + the secondary row.

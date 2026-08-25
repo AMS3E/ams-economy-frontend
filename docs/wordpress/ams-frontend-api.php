@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AMS Frontend API
  * Description: General-purpose endpoints for the AMS Infotainment Next.js frontend (add new ones here as needed). Read-only + a standalone hero-slider embed + the homepage featured-program picker + anonymous REST commenting + per-user login tokens for authenticated writes + program custom-meta exposed to REST + skips AMS Cache's synchronous page warmer on dashboard writes (96s -> under 1s). Self-contained — deactivate/delete anytime with zero effect on anything else.
- * Version:     1.10.2
+ * Version:     1.20.1
  * Author:      Soth Kimleng
  *
  * Standalone "add endpoints as needed" API file, separate from the legacy
@@ -33,26 +33,47 @@
  *        { id, name, username, roles, capabilities }. Send the token back on every
  *        write in an  X-AMS-Token:  header (see the auth note below) and the REST
  *        call runs AS that user, with WordPress enforcing capabilities natively.
- *        Errors stay HTTP 200 and carry `status: error` plus their semantic
- *        `http_status` in JSON because this host replaces 4xx REST bodies with
- *        an HTML 404 page. `http_status` is 401 on bad credentials, 403 if the
- *        account has no dashboard access, and 429 once an IP trips the brute-
- *        force throttle. Requires HTTPS.
+ *        401 on bad credentials, 403 if the account has no dashboard access,
+ *        429 once an IP trips the brute-force throttle. Requires HTTPS.
  *
  *  GET /wp-json/wp/v2/web/me                               who the token is
  *        The same { id, name, username, roles, capabilities } for whoever the
  *        X-AMS-Token identifies. The frontend calls it to re-validate a stored
  *        session and refresh role gating. 401 when the token is missing/expired.
  *
- *  POST /wp-json/wp/v2/web/cache/purge  { post_id }        refresh AMS Cache
- *        Deletes the WordPress site's cached HTML for the post, homepage,
- *        taxonomy archives and published landing Pages. It deliberately does
- *        not run AMS Cache's slow preload crawl. Gated on edit_posts.
+ *  POST /wp-json/wp/v2/web/cache/purge  { post_id }        refresh AMS Cache (1.10.0, rebuilt 1.17.0)
+ *        Deletes the WordPress site's OWN cached HTML for the pages a post
+ *        appears on: its page, the homepage, its category/tag archives, AND
+ *        every published landing Page (/strange/ and its ~55 siblings render
+ *        "latest news" blocks no purge-by-relationship can know about). Never
+ *        the preload crawl. 1.17.0 purges via ams-cache's own
+ *        scm_purge_cache_uri() — correct key by construction (see the key-
+ *        scheme note at ams_afa_cache_purge), stats sidecar + nginx copy
+ *        included, zero HTTP — replacing both the guessed-key deletes
+ *        (1.10.0, matched nothing) and the whole-store flush (1.15.0-1.16.0,
+ *        now the AMS_AFA_CACHE_FLUSH_ALL fallback lever, default OFF).
+ *        Exists because 1.9.0 removes AMS Cache's purge hooks for dashboard
+ *        writes (see the warmer note below), which keeps writes at ~5s but
+ *        leaves the WP site serving stale pages until TTL; the dashboard calls
+ *        this AFTER a publish returns, so the write stays fast and the old
+ *        site still refreshes. Answers { status, data: { driver, cached,
+ *        purged, pages: [ { url, label, cached, purged } ] } }; SKIPPED when
+ *        AMS Cache is absent or off. Failures come back as HTTP 200 +
+ *        status-in-body, because the host swaps 4xx bodies for HTML error
+ *        pages. Gated on edit_posts.
  *
  *  GET /wp-json/wp/v2/web/roles                            all roles + caps (1.7.5)
  *        Every role with its display name, granted capability list and user
  *        count — the dashboard's read-only Role Management screen. Gated on
  *        list_users (same as the Users screen), via X-AMS-Token.
+ *
+ *  GET /wp-json/wp/v2/web/post-templates            theme post templates (1.19.0)
+ *        The post templates the ACTIVE THEME registers, as {file, name} rows —
+ *        e.g. templates/celebrity-template.php -> "Celebrity-Article Block".
+ *        Core REST exposes a post's template VALUE but never the list of legal
+ *        ones (Gutenberg gets it from editor bootstrap, not the API), so the
+ *        dashboard's article editor had no way to render the dropdown without
+ *        hardcoding sixteen theme filenames. Gated on edit_posts.
  *
  *  GET /hero-embed[?alias=<slider alias>]                 standalone Slider
  *        Renders ONE Slider Revolution slider (no theme chrome), for embedding
@@ -63,6 +84,9 @@
  *        parent for responsive auto-sizing, and forwards slide-link clicks to
  *        the parent as postMessage — an <a> inside the iframe would otherwise
  *        navigate the visitor off the frontend and onto WordPress.
+ *        1.11.0: strips AMS Ads Manager's wp_head/wp_footer output, which was
+ *        booting the MSA/Damrei popup inside the frame (see the note in
+ *        ams_afa_render_embed). Applies to /sr-embed too — same renderer.
  *
  *  GET /sr-embed?alias=<slider alias>                     ANY slider   (1.8.0)
  *        The same standalone renderer, for sliders nobody can whitelist ahead
@@ -76,6 +100,21 @@
  *        (ams_afa_slider_alias) rather than from a hand-kept list.
  *
  * ── Behaviour changes ────────────────────────────────────────────────────────
+ *  Profile avatar (1.20.0): a writable `ams_avatar` REST field on the user
+ *        object, so GET/POST wp/v2/users/me carries the dashboard's profile
+ *        picture. Core has no uploadable avatar — `avatar_urls` is an
+ *        md5-of-email Gravatar, unset for every account on this site — so the
+ *        picture is an attachment referenced from user meta (`ams_avatar_id`
+ *        + `ams_avatar_url`, resolved at write time). See
+ *        ams_afa_user_avatar_write for why the URL is stored, not derived.
+ *
+ *  Episode → `_seasons` sync (1.18.0): REST episode writes (the dashboard's
+ *        episode dialog) now slot the episode into its show's `_seasons`
+ *        repeater — the structure the WP site actually renders episode lists
+ *        from — sorted by season and episode number, with the episode's
+ *        `_tv_show_season_id` index kept true. Trash/delete/untrash maintain
+ *        it too. See ams_afa_sync_show_seasons.
+ *
  *  Anonymous REST comments: WordPress supports anonymous commenting via the
  *        classic wp-comments-post.php but blocks it over REST by default. The
  *        site's discussion settings already allow anonymous comments, so the
@@ -115,7 +154,9 @@
  *        ({ movie_id, bg_image }).
  *  Settings → Frontend Cache        writes the option `ams_afa_revalidate`
  *        ({ url, secret }) — the publish→frontend revalidation webhook (1.7.3).
- *        These two options are the plugin's only stored state.
+ *        These two options are the plugin's only stored OPTIONS. Since 1.20.0
+ *        the profile avatar also leaves `ams_avatar_id` / `ams_avatar_url`
+ *        user-meta rows behind — harmless orphans if the plugin is deleted.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -126,7 +167,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // The Slider Revolution alias shown as the homepage hero (and the fallback for
 // any ?alias= this plugin doesn't recognise).
-define( 'AMS_AFA_HERO_ALIAS', 'cover-apr202021-11' );
+define( 'AMS_AFA_HERO_ALIAS', 'homepage-2' );
 
 /**
  * The sliders /hero-embed may render, read off the live landing pages'
@@ -149,16 +190,45 @@ function ams_afa_hero_aliases() {
     );
 }
 
+/** Bumped on every release. Part of the embed cache key, so shipping a new
+ *  version invalidates every cached frame rather than leaving stale HTML (and a
+ *  stale AMS_PARENTS list) behind a deploy. */
+define( 'AMS_AFA_VERSION', '1.20.1' );
+
+/** How long a rendered embed is reused server-side. The cost it avoids is a
+ *  ~3.7s WordPress boot; the price is that a slider edited in wp-admin takes up
+ *  to this long to appear in the frame. Ten minutes keeps editing tolerable
+ *  while making the boot effectively free — at one view per second, 599 of
+ *  every 600 views skip it. */
+define( 'AMS_AFA_EMBED_TTL', 10 * MINUTE_IN_SECONDS );
+
+/** Browser-side reuse. Deliberately shorter than the server TTL, and `private`
+ *  (see ams_afa_render_embed) so no shared proxy may store a frame whose URL
+ *  path alone does not identify which slider it holds. */
+define( 'AMS_AFA_EMBED_BROWSER_TTL', 5 * MINUTE_IN_SECONDS );
+
 /**
- * Frontend origins allowed to embed /hero-embed in an <iframe>.
- * ⬇⬇⬇  ADD YOUR PRODUCTION DOMAIN HERE WHEN YOU DEPLOY  ⬇⬇⬇
+ * Frontend origins allowed to embed /hero-embed and /sr-embed in an <iframe>.
+ *
+ * Feeds BOTH the frame-ancestors header and the AMS_PARENTS list the embed
+ * posts its height/clicks to — so an origin missing here is a hero that either
+ * refuses to connect or loads and never sizes itself.
+ *
+ * This list is baked into the CACHED /hero-embed HTML (AMS_PARENTS), so a
+ * change here needs AMS Cache cleared before it takes effect.
  */
 function ams_afa_embed_origins() {
     return array(
+        // Production (Dokploy). Its absence is what made the live hero blank —
+        // "infotainment.ams.com.kh refused to connect" — diagnosed and parked
+        // in Session 31 §5, fixed here in 1.11.0 because the popup fix below
+        // is unobservable in production while the frame itself is blocked.
+        // New Economy hostname. Keep `info` during DNS/Dokploy cutover so the
+        // currently live deployment does not lose its embedded sliders.
+        'https://eco.amscloud.cc',
+        'https://info.amscloud.cc',
         'http://localhost:3000',
-        'https://localhost:3000',
         'https://ams-infotainment-frontend.vercel.app',
-        // 'https://your-custom-domain.com',   // ← add your real domain when you have one
     );
 }
 
@@ -246,6 +316,190 @@ function ams_afa_season_name( $tv_show_id, $index ) {
     }
     return (string) $seasons[ $index ]['name'];
 }
+
+/* ─────────── Episode → show `_seasons` sync (1.18.0) ──────────────────────── */
+
+/* WHY THIS EXISTS: the WordPress site renders a show's episode lists from the
+ * show's `_seasons` meta — the serialised repeater wp-admin's "Seasons &
+ * Episodes" box edits — NOT from any query. An episode post with perfect meta
+ * that is absent from that array is invisible on the WP site. The Next.js side
+ * queries episodes by their `_tv_show_id` meta instead, which is why the
+ * dashboard always saw episodes the show page didn't. Dashboard-created
+ * episodes therefore existed everywhere except where readers look.
+ *
+ * These hooks keep `_seasons` true on every REST episode write and on
+ * trash/untrash/delete: the episode is slotted into the season its "S2:E8"
+ * label names, seasons stay sorted by number, episodes stay sorted by episode
+ * number — a backfilled E8 lands between E7 and E9, not at the end — and every
+ * episode's `_tv_show_season_id` (the season's array INDEX, which shifts when
+ * seasons are added or re-ordered) is re-pointed. Manual wp-admin edits still
+ * work; the next sync simply reconciles them.
+ */
+
+/** "S2:E8" → array( 2, 8 ). Tolerates spacing/case; a bare number means
+ *  season 1; unparseable → array( 0, 0 ). */
+function ams_afa_label_numbers( $label ) {
+    $label = (string) $label;
+    if ( preg_match( '/S\s*(\d+)\s*:\s*E\s*(\d+)/i', $label, $m ) ) {
+        return array( (int) $m[1], (int) $m[2] );
+    }
+    if ( preg_match( '/(\d+)\D+(\d+)/', $label, $m ) ) {
+        return array( (int) $m[1], (int) $m[2] );
+    }
+    if ( preg_match( '/(\d+)/', $label, $m ) ) {
+        return array( 1, (int) $m[1] );
+    }
+    return array( 0, 0 );
+}
+
+/** First number in a season NAME — Arabic or Khmer digits ("រដូវកាលទី ២" → 2);
+ *  $fallback when the name carries none. */
+function ams_afa_number_from_name( $name, $fallback ) {
+    $name = strtr( (string) $name, array(
+        '០' => '0', '១' => '1', '២' => '2', '៣' => '3', '៤' => '4',
+        '៥' => '5', '៦' => '6', '៧' => '7', '៨' => '8', '៩' => '9',
+    ) );
+    if ( preg_match( '/(\d+)/', $name, $m ) ) {
+        return (int) $m[1];
+    }
+    return (int) $fallback;
+}
+
+/** 2 → "២" — new seasons are named in the site's own convention. */
+function ams_afa_khmer_digits( $n ) {
+    return strtr( (string) (int) $n, array(
+        '0' => '០', '1' => '១', '2' => '២', '3' => '៣', '4' => '៤',
+        '5' => '៥', '6' => '៦', '7' => '៧', '8' => '៨', '9' => '៩',
+    ) );
+}
+
+/**
+ * Reconcile one episode into (or out of) its show's `_seasons` repeater.
+ * $remove_only is the trash/delete path: take it out of every season, touch
+ * nothing else.
+ */
+function ams_afa_sync_show_seasons( $episode_id, $remove_only = false ) {
+    $episode_id = (int) $episode_id;
+    $show_id    = (int) get_post_meta( $episode_id, '_tv_show_id', true );
+    if ( $show_id <= 0 || 'tv_show' !== get_post_type( $show_id ) ) {
+        return;
+    }
+
+    $seasons = maybe_unserialize( get_post_meta( $show_id, '_seasons', true ) );
+    if ( ! is_array( $seasons ) ) {
+        $seasons = array();
+    }
+    $before = $seasons;
+
+    // 1. Remove the episode everywhere first — a label edit may have moved it
+    //    to another season, and re-adding below is what puts it back.
+    foreach ( $seasons as $i => $season ) {
+        $eps = ( isset( $season['episodes'] ) && is_array( $season['episodes'] ) ) ? array_map( 'intval', $season['episodes'] ) : array();
+        $seasons[ $i ]['episodes'] = array_values( array_filter( $eps, function ( $e ) use ( $episode_id ) {
+            return $e > 0 && $e !== $episode_id;
+        } ) );
+    }
+
+    if ( ! $remove_only ) {
+        list( $season_no, ) = ams_afa_label_numbers( get_post_meta( $episode_id, '_episode_number', true ) );
+        if ( $season_no < 1 ) {
+            $season_no = 1;
+        }
+
+        // 2. The season the label names, matched by the number IN its name (so
+        //    "រដូវកាលទី ២", "Season 2" and "S2" all answer to season 2);
+        //    created in the site's Khmer naming when it doesn't exist yet.
+        $target = null;
+        foreach ( $seasons as $i => $season ) {
+            if ( ams_afa_number_from_name( isset( $season['name'] ) ? $season['name'] : '', $i + 1 ) === $season_no ) {
+                $target = $i;
+                break;
+            }
+        }
+        if ( null === $target ) {
+            $seasons[] = array(
+                'name'        => 'រដូវកាលទី ' . ams_afa_khmer_digits( $season_no ),
+                'image_id'    => '',
+                'episodes'    => array(),
+                'year'        => '',
+                'description' => '',
+            );
+            $target = count( $seasons ) - 1;
+        }
+
+        // 3. Insert, kept sorted by episode number (ties by post id, so the
+        //    order is at least stable when labels are missing or duplicated).
+        $eps   = $seasons[ $target ]['episodes'];
+        $eps[] = $episode_id;
+        $eps   = array_values( array_unique( $eps ) );
+        $keys  = array();
+        foreach ( $eps as $eid ) {
+            list( , $n )  = ams_afa_label_numbers( get_post_meta( $eid, '_episode_number', true ) );
+            $keys[ $eid ] = $n > 0 ? $n : PHP_INT_MAX;
+        }
+        usort( $eps, function ( $a, $b ) use ( $keys ) {
+            return $keys[ $a ] === $keys[ $b ] ? $a - $b : $keys[ $a ] - $keys[ $b ];
+        } );
+        $seasons[ $target ]['episodes'] = $eps;
+
+        // 4. Seasons themselves in season order (stable for number ties).
+        $order = array();
+        foreach ( $seasons as $i => $season ) {
+            $order[ $i ] = ams_afa_number_from_name( isset( $season['name'] ) ? $season['name'] : '', $i + 1 );
+        }
+        uksort( $seasons, function ( $a, $b ) use ( $order ) {
+            return $order[ $a ] === $order[ $b ] ? $a - $b : $order[ $a ] - $order[ $b ];
+        } );
+        $seasons = array_values( $seasons );
+    }
+
+    if ( $seasons !== $before ) {
+        update_post_meta( $show_id, '_seasons', $seasons );
+    }
+
+    // 5. Every listed episode's `_tv_show_season_id` must equal its season's
+    //    CURRENT index — creating or re-ordering seasons shifts the indexes of
+    //    everyone else's episodes too, and the episode page prints its season
+    //    name through this index. Writes only on drift, so the common case is
+    //    all no-ops.
+    foreach ( $seasons as $i => $season ) {
+        foreach ( $season['episodes'] as $eid ) {
+            if ( (int) get_post_meta( $eid, '_tv_show_season_id', true ) !== $i ) {
+                update_post_meta( $eid, '_tv_show_season_id', $i );
+            }
+        }
+    }
+}
+
+// After a REST create/update has fully landed (post + meta — this hook exists
+// precisely because meta is written after the insert). Covers the dashboard's
+// episode dialog; wp-admin's own metabox writes `_seasons` itself.
+add_action( 'rest_after_insert_episode', function ( $post ) {
+    if ( $post instanceof WP_Post && 'publish' === $post->post_status ) {
+        ams_afa_sync_show_seasons( $post->ID );
+    }
+}, 20, 1 );
+
+// Leaving the site: out of the repeater, whichever door — dashboard trash,
+// wp-admin trash, or a straight force-delete.
+add_action( 'wp_trash_post', function ( $post_id ) {
+    if ( 'episode' === get_post_type( $post_id ) ) {
+        ams_afa_sync_show_seasons( $post_id, true );
+    }
+}, 10, 1 );
+add_action( 'before_delete_post', function ( $post_id ) {
+    if ( 'episode' === get_post_type( $post_id ) ) {
+        ams_afa_sync_show_seasons( $post_id, true );
+    }
+}, 10, 1 );
+
+// Restored from trash: back into its season — but only once it is published
+// again (core restores to draft by default since WP 5.6).
+add_action( 'untrashed_post', function ( $post_id ) {
+    if ( 'episode' === get_post_type( $post_id ) && 'publish' === get_post_status( $post_id ) ) {
+        ams_afa_sync_show_seasons( $post_id );
+    }
+}, 10, 1 );
 
 /**
  * GET /wp-json/wp/v2/web/episode?id=<id>
@@ -637,6 +891,75 @@ function ams_afa_get_roles() {
     return new WP_REST_Response( array( 'status' => 'OK', 'data' => $data ), 200 );
 }
 
+/* ───────────────── Post templates (dashboard article editor) ──────────────── */
+
+add_action( 'rest_api_init', function () {
+    register_rest_route( 'wp/v2/web', 'post-templates', array(
+        'methods'             => 'GET',
+        'callback'            => 'ams_afa_get_post_templates',
+        // Anyone who may edit a post may see which layouts a post can use.
+        // Runs as the X-AMS-Token user via the determine_current_user filter.
+        'permission_callback' => function () {
+            return current_user_can( 'edit_posts' );
+        },
+    ) );
+} );
+
+/**
+ * GET /wp-json/wp/v2/web/post-templates — the post templates the ACTIVE theme
+ * registers, newest-theme-truth rather than a list copied into the frontend.
+ *
+ * Why this endpoint exists at all: core's posts controller returns a post's
+ * `template` (readable AND writable, verified against this install), but the
+ * SCHEMA carries no enum of legal values and no route lists them. Gutenberg
+ * renders its own Template dropdown from `availableTemplates` in the editor
+ * bootstrap, which is PHP-side state the REST API never publishes. Without this,
+ * the dashboard editor's only options were hardcoding the theme's filenames or
+ * scraping wp-admin — the first goes stale silently the moment the theme adds a
+ * template, the second is not a contract.
+ *
+ * `get_post_templates()` is on WP_Theme and walks the parent chain itself, so a
+ * child theme (this site runs vodi-child) gets its own templates AND the
+ * parent's, exactly as the block editor would show them. Empty array is a legal
+ * answer — a theme need not register any.
+ */
+function ams_afa_get_post_templates( $request ) {
+    $post_type = (string) $request->get_param( 'post_type' );
+    if ( '' === $post_type ) {
+        $post_type = 'post';
+    }
+    if ( ! post_type_exists( $post_type ) ) {
+        return new WP_REST_Response(
+            array( 'status' => 'ERROR', 'message' => 'Unknown post type.' ),
+            400
+        );
+    }
+
+    // Keyed file => display name. Sorted by NAME because that is the order the
+    // dropdown reads in; the file order is registration order, which is noise.
+    $templates = wp_get_theme()->get_post_templates();
+    $for_type  = isset( $templates[ $post_type ] ) ? (array) $templates[ $post_type ] : array();
+    asort( $for_type, SORT_NATURAL | SORT_FLAG_CASE );
+
+    $data = array();
+    foreach ( $for_type as $file => $name ) {
+        $data[] = array(
+            'file' => (string) $file,
+            'name' => (string) $name,
+        );
+    }
+
+    return new WP_REST_Response(
+        array(
+            'status'    => 'OK',
+            'post_type' => $post_type,
+            'theme'     => (string) wp_get_theme()->get_stylesheet(),
+            'data'      => $data,
+        ),
+        200
+    );
+}
+
 add_action( 'rest_api_init', function () {
     register_rest_route( 'wp/v2/web', 'featured-program', array(
         array(
@@ -758,16 +1081,15 @@ function ams_afa_get_featured_program() {
  * frontend renders, and sends the frontend's cache tags for exactly the pages
  * the change touches:
  *
- *   post              → every article list/detail, category registry and
- *                       author registry, plus scoped article/category tags
- *   episode           → episodes, authors, tv-show:<its show id>
- *   movie / tv_show   → program, authors
- *   page              → pages
+ *   post              → articles, home, daily-events, article:<slug>,
+ *                       category:<slug> (each of its categories)
+ *   episode           → episodes, tv-show:<its show id>
+ *   movie / tv_show   → program
  *
  * Configure it in Settings → Frontend Cache (webhook URL + shared secret; the
  * secret must equal the frontend's REVALIDATE_SECRET env). Unconfigured = the
  * hook no-ops, so the plugin stays safe to deploy anywhere. The request is
- * fire-and-forget (non-blocking, 2s cap) — publishing never waits on Next.js.
+ * fire-and-forget (non-blocking, 2s cap) — publishing never waits on Vercel.
  */
 define( 'AMS_AFA_REVALIDATE_OPTION', 'ams_afa_revalidate' );
 
@@ -776,10 +1098,6 @@ function ams_afa_revalidate_config() {
     return array(
         'url'    => isset( $opt['url'] ) ? (string) $opt['url'] : '',
         'secret' => isset( $opt['secret'] ) ? (string) $opt['secret'] : '',
-        // Optional Vercel Protection Bypass for Automation secret. Preview and
-        // branch domains otherwise redirect this server-to-server webhook to
-        // Vercel SSO before Next.js can run /api/revalidate.
-        'vercel_bypass' => isset( $opt['vercel_bypass'] ) ? (string) $opt['vercel_bypass'] : '',
     );
 }
 
@@ -787,16 +1105,7 @@ function ams_afa_revalidate_config() {
 function ams_afa_revalidate_tags( $post ) {
     switch ( $post->post_type ) {
         case 'post':
-            // Blanket tags are intentional. transition_post_status runs before
-            // REST has applied terms/meta, and it only receives the NEW slug.
-            // `articles` covers every list; `article` also expires an old-slug
-            // detail after a rename; categories/authors refresh route registries
-            // and counts whose membership can change on publish/unpublish.
-            $tags = array(
-                'articles', 'article', 'home', 'daily-events', 'categories',
-                'authors', 'author:' . (int) $post->post_author,
-                'article:' . $post->post_name,
-            );
+            $tags = array( 'articles', 'home', 'daily-events', 'article:' . $post->post_name );
             $terms = get_the_terms( $post, 'category' );
             if ( is_array( $terms ) ) {
                 foreach ( $terms as $t ) {
@@ -808,17 +1117,12 @@ function ams_afa_revalidate_tags( $post ) {
             return $tags;
         case 'episode':
             $show = (int) get_post_meta( $post->ID, '_tv_show_id', true );
-            return $show
-                ? array( 'episodes', 'authors', 'tv-show:' . $show )
-                : array( 'episodes', 'authors' );
+            return $show ? array( 'episodes', 'tv-show:' . $show ) : array( 'episodes' );
         case 'movie':
         case 'tv_show':
             // The frontend keys program pages by ITS OWN registry slugs, which
             // WordPress cannot know — the blanket tag (≈43 pages) is correct.
-            return array( 'program', 'authors' );
-        case 'page':
-            // A blanket tag also retires a cached old path after a slug change.
-            return array( 'pages' );
+            return array( 'program' );
         default:
             return array();
     }
@@ -834,18 +1138,13 @@ function ams_afa_ping_revalidate( $tags ) {
     // Repeated ?tag= params (the route reads getAll("tag")); add_query_arg
     // can't repeat a key, so the query string is built by hand.
     $query = 'secret=' . rawurlencode( $cfg['secret'] );
-    foreach ( array_values( array_unique( $tags ) ) as $tag ) {
+    foreach ( $tags as $tag ) {
         $query .= '&tag=' . rawurlencode( $tag );
-    }
-    $headers = array();
-    if ( $cfg['vercel_bypass'] ) {
-        $headers['x-vercel-protection-bypass'] = $cfg['vercel_bypass'];
     }
     wp_remote_post( $cfg['url'] . '?' . $query, array(
         'blocking'  => false,
         'timeout'   => 2,
         'sslverify' => true,
-        'headers'   => $headers,
     ) );
 }
 
@@ -853,90 +1152,13 @@ add_action( 'transition_post_status', function ( $new_status, $old_status, $post
     if ( 'publish' !== $new_status && 'publish' !== $old_status ) {
         return; // draft shuffling — nothing public changed
     }
-    if ( ! in_array( $post->post_type, array( 'post', 'episode', 'movie', 'tv_show', 'page' ), true ) ) {
+    if ( ! in_array( $post->post_type, array( 'post', 'episode', 'movie', 'tv_show' ), true ) ) {
         return;
     }
     ams_afa_ping_revalidate( ams_afa_revalidate_tags( $post ) );
 }, 10, 3 );
 
-/** Category structure, labels, paths and counts feed routing as well as cards.
- *  The article-detail blanket is needed because that endpoint embeds category
- *  names in its own cached response. */
-function ams_afa_revalidate_category_change( $term_id, $tt_id, $taxonomy ) {
-    if ( 'category' === $taxonomy ) {
-        ams_afa_ping_revalidate( array( 'categories', 'articles', 'article' ) );
-    }
-}
-add_action( 'created_term', 'ams_afa_revalidate_category_change', 10, 3 );
-add_action( 'edited_term', 'ams_afa_revalidate_category_change', 10, 3 );
-add_action( 'delete_term', 'ams_afa_revalidate_category_change', 10, 3 );
-
-/** Author archives use a cached public-user registry; article detail responses
- *  also embed the author's display name and description. */
-function ams_afa_revalidate_author_change() {
-    ams_afa_ping_revalidate( array( 'authors', 'article' ) );
-}
-add_action( 'user_register', 'ams_afa_revalidate_author_change', 10, 0 );
-add_action( 'profile_update', 'ams_afa_revalidate_author_change', 10, 0 );
-add_action( 'deleted_user', 'ams_afa_revalidate_author_change', 10, 0 );
-
-/**
- * Menu reads are cached by the frontend under `menu`. A menu write can happen
- * through wp-admin, the Customizer, core REST, or this project's Admin, so hook
- * WordPress itself instead of relying on the UI that initiated the change.
- *
- * Schedule one ping at shutdown: the classic menu editor updates many items in
- * one request, and pinging after every item could both flood Vercel and let an
- * early regeneration observe a half-written ordering.
- */
-function ams_afa_schedule_menu_revalidate() {
-    static $scheduled = false;
-    if ( $scheduled ) {
-        return;
-    }
-    $scheduled = true;
-    add_action( 'shutdown', function () {
-        ams_afa_ping_revalidate( array( 'menu' ) );
-    }, PHP_INT_MAX );
-}
-add_action( 'wp_create_nav_menu', 'ams_afa_schedule_menu_revalidate', 10, 0 );
-add_action( 'wp_update_nav_menu', 'ams_afa_schedule_menu_revalidate', 10, 0 );
-add_action( 'wp_delete_nav_menu', 'ams_afa_schedule_menu_revalidate', 10, 0 );
-add_action( 'wp_add_nav_menu_item', 'ams_afa_schedule_menu_revalidate', 10, 0 );
-add_action( 'wp_update_nav_menu_item', 'ams_afa_schedule_menu_revalidate', 10, 0 );
-add_action( 'before_delete_post', function ( $post_id, $post ) {
-    if ( $post instanceof WP_Post && 'nav_menu_item' === $post->post_type ) {
-        ams_afa_schedule_menu_revalidate();
-    }
-}, 10, 2 );
-
-/** Public pages render approved comment counts. */
-function ams_afa_revalidate_comment_change( $comment ) {
-    $comment = is_object( $comment ) ? $comment : get_comment( $comment );
-    $tags    = array( 'comments' );
-    if ( $comment && ! empty( $comment->comment_post_ID ) ) {
-        $tags[] = 'comments:' . (int) $comment->comment_post_ID;
-    }
-    ams_afa_ping_revalidate( $tags );
-}
-add_action( 'comment_post', 'ams_afa_revalidate_comment_change', 10, 1 );
-add_action( 'edit_comment', 'ams_afa_revalidate_comment_change', 10, 1 );
-add_action( 'delete_comment', function ( $comment_id, $comment ) {
-    ams_afa_revalidate_comment_change( $comment ?: $comment_id );
-}, 10, 2 );
-add_action( 'transition_comment_status', function ( $new_status, $old_status, $comment ) {
-    ams_afa_revalidate_comment_change( $comment );
-}, 10, 3 );
-
-/** Attachments supply program artwork and article featured images. */
-function ams_afa_revalidate_attachment_change() {
-    ams_afa_ping_revalidate( array( 'media', 'program', 'articles', 'article' ) );
-}
-add_action( 'add_attachment', 'ams_afa_revalidate_attachment_change', 10, 0 );
-add_action( 'edit_attachment', 'ams_afa_revalidate_attachment_change', 10, 0 );
-add_action( 'delete_attachment', 'ams_afa_revalidate_attachment_change', 10, 0 );
-
-/* --- AMS Cache: skip its synchronous page WARMER on our writes (1.9.0) --- */
+/* --- AMS Cache: keep its PURGE, drop only its synchronous crawl (1.13.0) --- */
 
 /**
  * Measured 2026-08-10 with docs/wordpress/ams-write-probe, per callback:
@@ -959,15 +1181,37 @@ add_action( 'delete_attachment', 'ams_afa_revalidate_attachment_change', 10, 0 )
  * delete. Draft saves are already free — scm_update_post returns early unless
  * post_status is 'publish', which is why a draft create measures 715 ms.
  *
- * WHY REMOVING IT IS SAFE, not merely faster:
+ * 1.13.0 — WHAT CHANGED, AND WHY THE 1.9.0 SHAPE WAS WRONG.
+ *
+ * 1.9.0 removed all four callbacks. That killed the crawl, but it also killed
+ * the PURGE, so a dashboard publish stopped invalidating the WP page cache
+ * entirely. 1.10.0 tried to hand-roll the purge in ams_afa_cache_purge() below
+ * — and it never worked: measured 2026-08-18, every target reported
+ * cached:false/purged:false while the site was demonstrably serving 22-hour-old
+ * cached HTML with ams-cache's own footer on it. The stored key scheme in this
+ * fork is not the md5(path) we assumed. Symptom the owner actually saw: an
+ * article published from the dashboard was visible to logged-in users (who
+ * bypass the cache) and invisible to everyone else until the 24h TTL expired.
+ *
+ * So the amputation is replaced by a scalpel. The four callbacks stay
+ * REGISTERED — ams-cache purges with its own key logic, which cannot mismatch
+ * what wrote the entry — and only the expensive half is neutralised, by
+ * short-circuiting the site's self-directed HTTP (ams_afa_block_self_http).
+ * The purge is a handful of key deletes; the 96s was always the crawl.
+ *
+ * WHY PURGE-WITHOUT-WARM IS SAFE, not merely faster:
  *   - The warmer fills a cache of WORDPRESS-RENDERED PAGES. The public site is
  *     the Next.js frontend now; the only WP-rendered pages a visitor still sees
  *     are /hero-embed and the Slider Revolution ad frames, and no article write
  *     invalidates either of those.
  *   - The frontend's own cache is refreshed by ams_afa_ping_revalidate() above,
- *     which is non-blocking with a 2s cap. That one stays.
+ *     which is non-blocking with a 2s cap and targets a DIFFERENT host, so the
+ *     self-HTTP block never touches it. That one stays.
  *   - PURGING is not the cost; warming is. And purge-without-warm is precisely
- *     what a cache is built to survive — the next visitor re-renders once.
+ *     what a cache is built to survive — the next visitor re-renders once. The
+ *     editor's LegacySiteChip already re-warms the affected URLs from the
+ *     browser afterwards, off the write path, so in practice few visitors land
+ *     on a cold page.
  *
  * SCOPE: only requests carrying our header, so wp-admin keeps every bit of its
  * present behaviour, and no other plugin is touched or disabled.
@@ -982,83 +1226,133 @@ add_action( 'delete_attachment', 'ams_afa_revalidate_attachment_change', 10, 0 )
  * moved a priority, which would otherwise be a SILENT return to minute-long
  * writes, so it is written to the error log as well.
  */
-add_action( 'rest_api_init', function () {
-    if ( '' === ams_afa_request_token() ) {
-        return;
+/**
+ * Count of self-directed HTTP requests short-circuited in THIS request.
+ * Static rather than a global so nothing else can write to it.
+ */
+function ams_afa_self_http_blocked( $increment = false ) {
+    static $n = 0;
+    if ( $increment ) {
+        $n++;
+    }
+    return $n;
+}
+
+/**
+ * Short-circuit HTTP requests the site makes TO ITSELF.
+ *
+ * This is the scalpel that replaces the 1.9.0 amputation. ams-cache's purge
+ * callbacks are cheap (a few key deletes); the 96s is scm_preload_critical_urls()
+ * re-rendering pages over HTTP, synchronously, inside the write. Blocking that
+ * traffic leaves the purge intact and makes the crawl instant.
+ *
+ * Answering with a well-formed 200/empty body rather than a WP_Error is
+ * deliberate: the caller is a preloader throwing away the result, and an error
+ * could send a retry loop or an admin notice down a path nobody has read.
+ *
+ * NARROW BY DESIGN — same host only, GET/HEAD only, and only while a dashboard
+ * write is being dispatched (see the caller). Outbound calls to anywhere else
+ * are untouched, which is what keeps ams_afa_ping_revalidate() (it targets the
+ * Next.js origin, a different host) and any third-party webhook working.
+ */
+function ams_afa_block_self_http( $pre, $args, $url ) {
+    // Another filter already answered — don't fight it.
+    if ( false !== $pre ) {
+        return $pre;
     }
 
-    $targets = array(
-        'save_post'              => 'scm_update_post',
-        'transition_post_status' => 'scm_update_post_status',
-        'wp_trash_post'          => 'scm_purge_post_before_trash',
-        'before_delete_post'     => 'scm_delete_post',
+    $host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+    $home = strtolower( (string) wp_parse_url( home_url( '/' ), PHP_URL_HOST ) );
+    if ( '' === $host || '' === $home || $host !== $home ) {
+        return $pre;
+    }
+
+    $method = isset( $args['method'] ) ? strtoupper( (string) $args['method'] ) : 'GET';
+    if ( 'GET' !== $method && 'HEAD' !== $method ) {
+        return $pre;
+    }
+
+    ams_afa_self_http_blocked( true );
+
+    return array(
+        'headers'  => array(),
+        'body'     => '',
+        'response' => array( 'code' => 200, 'message' => 'OK' ),
+        'cookies'  => array(),
+        'filename' => null,
     );
+}
 
-    $removed = array();
-    $missing = array();
-
-    foreach ( $targets as $hook => $callback ) {
-        // has_action() returns the PRIORITY, which can legitimately be 0 — hence
-        // the strict comparison instead of a truthiness test.
-        $priority = has_action( $hook, $callback );
-        if ( false !== $priority ) {
-            remove_action( $hook, $callback, $priority );
-            $removed[] = $callback;
-        } else {
-            $missing[] = $hook . ':' . $callback;
-        }
-    }
-
-    if ( $missing ) {
-        error_log( '[ams-afa] ams-cache warmer NOT removed: ' . implode( ', ', $missing ) );
-    }
-
-    add_filter( 'rest_post_dispatch', function ( $response ) use ( $removed ) {
-        if ( $response instanceof WP_REST_Response ) {
-            $response->header( 'X-AMS-Cache-Preload', 'skipped:' . count( $removed ) );
-        }
-        return $response;
-    }, 10, 1 );
-}, 5 );
-
-/* ─────────── POST /wp-json/wp/v2/web/cache/purge  (dashboard → AMS Cache) ─── */
-
-add_action( 'rest_api_init', function () {
-    register_rest_route( 'wp/v2/web', 'cache/purge', array(
-        'methods'             => 'POST',
-        'callback'            => 'ams_afa_cache_purge',
-        'permission_callback' => function () {
-            return current_user_can( 'edit_posts' );
-        },
-        'args'                => array(
-            'post_id' => array( 'required' => true, 'type' => 'integer' ),
-        ),
-    ) );
-} );
-
-/** Optional emergency lever used only when AMS_AFA_CACHE_FLUSH_ALL is true. */
+/**
+ * Flush the ENTIRE AMS Cache — since 1.17.0 the FALLBACK, no longer the default.
+ *
+ * 1.15.0 reached for this because the targeted purges had to GUESS each entry's
+ * key and guessed wrong for three versions. That mystery is solved: reading the
+ * ams-cache source (docs/wordpress/ams-cache.zip, pulled off the live site)
+ * showed the real key is md5( <prefix> . '|' . <normalized path> ) — our
+ * md5(path) never matched anything. Better still, the plugin exposes
+ * scm_purge_cache_uri(), which purges one page with the correct key, its stats
+ * sidecar and its nginx copy, no HTTP. 1.17.0's targeted purge is built on it,
+ * so the blunt instrument is no longer needed for correctness.
+ *
+ * Kept as a lever: `define( 'AMS_AFA_CACHE_FLUSH_ALL', true );` in wp-config.php
+ * flushes the whole store instead — the escape hatch if the target list ever
+ * turns out to miss a surface in practice, usable with no re-upload. The cost is
+ * a fully cold site (5-19s per first visit, measured on this box).
+ *
+ * Returns whether it actually flushed, so the response can say — never again a
+ * cache operation that reports success while doing nothing.
+ */
 function ams_afa_flush_all_cache() {
+    static $done = null;
+    if ( null !== $done ) {
+        return $done;
+    }
+    $done = false;
+
     if ( ! function_exists( 'scm_driver_factory' ) ) {
-        return false;
+        return $done;
     }
     if ( 'enable' !== get_option( 'scm_option_caching_status', 'disable' ) ) {
-        return false;
+        return $done;
     }
 
     try {
         $driver = scm_driver_factory( get_option( 'scm_option_driver', 'file' ) );
         if ( is_object( $driver ) && method_exists( $driver, 'clear' ) ) {
             $driver->clear();
-            return true;
+            $done = true;
+        } else {
+            error_log( '[ams-afa] cache flush: driver exposes no clear() method' );
         }
     } catch ( Throwable $e ) {
         error_log( '[ams-afa] cache flush failed: ' . $e->getMessage() );
     }
-    return false;
+
+    return $done;
 }
 
-/** Published WordPress Pages can contain latest-article blocks without having
- * a recorded relationship to the post, so include them as cache targets. */
+/**
+ * The published landing Pages, as purge targets (1.14.0, reshaped 1.17.0).
+ *
+ * The gap 1.13.0 left, found the moment it was tested: a publish correctly
+ * purged the article's own URL, its categories and the homepage — and left
+ * /strange/ serving a copy from the previous day. /strange/ is not a category.
+ * It is a PAGE (ID 16156) whose template happens to render a "latest news"
+ * block, and WordPress records no relationship between a post and a page that
+ * merely lists it. Nothing could have known to invalidate it. Fifty-five
+ * published pages share that shape — /life-style/, /celebrity/,
+ * /entertainment-news/, /movie-and-music/ and the rest. This is structural in
+ * ams-cache too: its own purge vocabulary is post URL + taxonomy/date/author
+ * archives, nothing else, so a plain wp-admin publish ALSO leaves /strange/
+ * stale. Any purge of "the pages an article appears on" must carry this list.
+ *
+ * 1.14.0 handed each page to scm_update_post() because we could not delete
+ * keys ourselves (wrong key scheme, see ams_afa_cache_purge). That worked but
+ * dragged scm_update_post's synchronous preload along, needing the self-HTTP
+ * block to stay cheap. Now that scm_purge_cache_uri() is known, the pages are
+ * simply returned as targets for the same purge loop as everything else.
+ */
 function ams_afa_landing_page_targets() {
     $page_ids = get_posts( array(
         'post_type'              => 'page',
@@ -1071,127 +1365,182 @@ function ams_afa_landing_page_targets() {
     ) );
 
     $targets = array();
-    foreach ( $page_ids as $page_id ) {
-        $url = get_permalink( $page_id );
+    foreach ( $page_ids as $pid ) {
+        $url = get_permalink( $pid );
         if ( $url ) {
-            $targets[] = array( 'url' => $url, 'label' => get_the_title( $page_id ) );
+            $targets[] = array(
+                'url'   => $url,
+                'label' => get_the_title( $pid ),
+            );
         }
     }
     return $targets;
 }
 
-/** Build the pages on which a post can appear, then deduplicate by URL path. */
-function ams_afa_cache_purge_targets( $post ) {
+add_action( 'rest_api_init', function () {
+    if ( '' === ams_afa_request_token() ) {
+        return;
+    }
+
     $targets = array(
-        array( 'url' => home_url( '/' ), 'label' => 'Homepage' ),
+        'save_post'              => 'scm_update_post',
+        'transition_post_status' => 'scm_update_post_status',
+        'wp_trash_post'          => 'scm_purge_post_before_trash',
+        'before_delete_post'     => 'scm_delete_post',
     );
 
-    $permalink = get_permalink( $post );
-    if ( $permalink && 'trash' === $post->post_status ) {
-        $permalink = str_replace( '__trashed', '', $permalink );
+    /* ROLLBACK LEVER. `define( 'AMS_AFA_CACHE_MODE', 'skip' );` in wp-config.php
+     * restores the 1.9.0 behaviour instantly, with no plugin re-upload — the
+     * escape hatch if blocking self-HTTP turns out not to catch the crawl (a
+     * preloader using raw curl instead of the WP HTTP API would slip past
+     * pre_http_request, and the symptom would be minute-long saves returning). */
+    /* DEFAULT IS 'skip' AGAIN AS OF 1.16.0 — the write path does NO cache work.
+     *
+     * 1.13.0 made 'purge' the default on the premise (from the 1.9.0 notes) that
+     * the 96s was all crawl and purging was cheap. It is not: with the crawl
+     * blocked, ams-cache's callbacks still cost ~29s inside the write. The admin
+     * client aborts writes at 30s (src/lib/admin/client.ts), so saves began
+     * ABORTING while WordPress committed them anyway — the editor reported
+     * failure for work that had actually succeeded, which is far worse than a
+     * stale cache.
+     *
+     * The fix is not a bigger timeout. Cache work does not belong in the write
+     * at all: it is now done by web/cache/purge, which the editor calls from the
+     * browser AFTER the save returns, blocking nothing. */
+    $mode = defined( 'AMS_AFA_CACHE_MODE' ) ? AMS_AFA_CACHE_MODE : 'skip';
+
+    if ( 'skip' === $mode ) {
+        $removed = array();
+        $missing = array();
+
+        foreach ( $targets as $hook => $callback ) {
+            // has_action() returns the PRIORITY, which can legitimately be 0 —
+            // hence the strict comparison instead of a truthiness test.
+            $priority = has_action( $hook, $callback );
+            if ( false !== $priority ) {
+                remove_action( $hook, $callback, $priority );
+                $removed[] = $callback;
+            } else {
+                $missing[] = $hook . ':' . $callback;
+            }
+        }
+
+        if ( $missing ) {
+            error_log( '[ams-afa] ams-cache warmer NOT removed: ' . implode( ', ', $missing ) );
+        }
+
+        add_filter( 'rest_post_dispatch', function ( $response ) use ( $removed ) {
+            if ( $response instanceof WP_REST_Response ) {
+                $response->header( 'X-AMS-Cache-Preload', 'mode=skip skipped=' . count( $removed ) );
+            }
+            return $response;
+        }, 10, 1 );
+        return;
     }
-    if ( $permalink ) {
-        $type_obj = get_post_type_object( $post->post_type );
-        $targets[] = array(
-            'url'   => $permalink,
-            'label' => $type_obj ? $type_obj->labels->singular_name : 'Post',
-        );
-    }
 
-    if ( 'post' === $post->post_type ) {
-        $terms = get_the_terms( $post, 'category' );
-        if ( is_array( $terms ) ) {
-            $ids = array();
-            foreach ( $terms as $term ) {
-                $ids[] = (int) $term->term_id;
-                foreach ( get_ancestors( $term->term_id, 'category' ) as $ancestor ) {
-                    $ids[] = (int) $ancestor;
-                }
-            }
-            foreach ( array_unique( $ids ) as $term_id ) {
-                $url  = get_term_link( $term_id, 'category' );
-                $term = get_term( $term_id, 'category' );
-                if ( ! is_wp_error( $url ) && $term && ! is_wp_error( $term ) ) {
-                    $targets[] = array( 'url' => $url, 'label' => $term->name );
-                }
-            }
-        }
-
-        $tags = get_the_terms( $post, 'post_tag' );
-        if ( is_array( $tags ) ) {
-            foreach ( $tags as $tag ) {
-                $url = get_term_link( $tag );
-                if ( ! is_wp_error( $url ) ) {
-                    $targets[] = array( 'url' => $url, 'label' => $tag->name );
-                }
-            }
-        }
-    } else {
-        $archive = get_post_type_archive_link( $post->post_type );
-        if ( $archive ) {
-            $targets[] = array( 'url' => $archive, 'label' => 'Archive' );
-        }
-
-        // MasVideos stores a movie, its tv_show container and episodes as a
-        // linked family. A change to any member can stale the others' pages.
-        $show_id = 0;
-        if ( 'episode' === $post->post_type ) {
-            $show_id = (int) get_post_meta( $post->ID, '_tv_show_id', true );
-        } elseif ( 'movie' === $post->post_type ) {
-            $show_id = (int) get_post_meta( $post->ID, '_khi_tv_show_id', true );
-        } elseif ( 'tv_show' === $post->post_type ) {
-            $show_id = $post->ID;
-        }
-
-        if ( $show_id > 0 ) {
-            if ( 'tv_show' !== $post->post_type ) {
-                $show_url = get_permalink( $show_id );
-                if ( $show_url ) {
-                    $targets[] = array(
-                        'url'   => str_replace( '__trashed', '', $show_url ),
-                        'label' => get_the_title( $show_id ),
-                    );
-                }
-            }
-            if ( 'movie' !== $post->post_type ) {
-                $movie_ids = get_posts( array(
-                    'post_type'     => 'movie',
-                    'post_status'   => 'publish',
-                    'numberposts'   => 1,
-                    'fields'        => 'ids',
-                    'no_found_rows' => true,
-                    'meta_key'      => '_khi_tv_show_id',
-                    'meta_value'    => $show_id,
-                ) );
-                foreach ( $movie_ids as $movie_id ) {
-                    $movie_url = get_permalink( $movie_id );
-                    if ( $movie_url ) {
-                        $targets[] = array( 'url' => $movie_url, 'label' => get_the_title( $movie_id ) );
-                    }
-                }
-            }
+    /* 'purge' mode (default, 1.13.0) — leave ams-cache's callbacks REGISTERED so
+     * it invalidates with its own key logic, which by construction matches
+     * whatever wrote the entry. That is the whole point: our own reimplementation
+     * in ams_afa_cache_purge() below could not find a single live entry (measured
+     * 2026-08-18 — every page reported cached:false while the site was demonstrably
+     * serving 22-hour-old cached HTML), because the key scheme this fork actually
+     * uses is not the one we guessed. Asking the plugin to purge itself removes
+     * that guess from the design. */
+    $present = 0;
+    foreach ( $targets as $hook => $callback ) {
+        if ( false !== has_action( $hook, $callback ) ) {
+            $present++;
         }
     }
 
-    $seen = array();
-    $out  = array();
-    foreach ( $targets as $target ) {
-        $path = parse_url( $target['url'], PHP_URL_PATH );
-        $path = ( is_string( $path ) && '' !== $path ) ? $path : '/';
-        if ( isset( $seen[ $path ] ) ) {
-            continue;
-        }
-        $seen[ $path ] = true;
-        $target['path'] = $path;
-        $out[] = $target;
+    // hooks=0 means publishes silently stop invalidating — the exact failure this
+    // change exists to end, so it must never be silent again.
+    if ( 0 === $present ) {
+        error_log( '[ams-afa] ams-cache purge callbacks absent — dashboard writes will NOT invalidate the WP page cache.' );
     }
-    return $out;
-}
+
+    // By reference into both closures below, so the response header reports what
+    // the write actually did rather than what it intended.
+    $flushed = 0;
+
+    add_filter( 'pre_http_request', 'ams_afa_block_self_http', 10, 3 );
+
+    /* NOTHING CACHE-RELATED IS HOOKED INTO THE WRITE HERE — deliberately, and
+     * this is the lesson of 1.13.0-1.15.0. Every version that did cache work
+     * inside the save spent the editor's 30s budget on it. The flush now lives
+     * in web/cache/purge, called from the browser after the save completes. */
+
+    add_filter( 'rest_post_dispatch', function ( $response ) use ( $present, &$flushed ) {
+        if ( $response instanceof WP_REST_Response ) {
+            $response->header(
+                'X-AMS-Cache-Preload',
+                'mode=purge hooks=' . $present
+                    . ' blocked=' . ams_afa_self_http_blocked()
+                    . ' flushed=' . (int) $flushed
+            );
+        }
+        return $response;
+    }, 10, 1 );
+}, 5 );
+
+/* ─────────── POST /wp-json/wp/v2/web/cache/purge  (dashboard → AMS Cache) ─── */
+
+add_action( 'rest_api_init', function () {
+    register_rest_route( 'wp/v2/web', 'cache/purge', array(
+        'methods'             => 'POST',
+        'callback'            => 'ams_afa_cache_purge',
+        // Any dashboard user who can write content may refresh the cache of the
+        // pages that content sits on. Runs as the X-AMS-Token user.
+        'permission_callback' => function () {
+            return current_user_can( 'edit_posts' );
+        },
+        'args'                => array(
+            'post_id' => array( 'required' => true, 'type' => 'integer' ),
+        ),
+    ) );
+} );
 
 /**
- * Purge AMS Cache after a dashboard write without triggering its synchronous
- * preload crawl. Cache keys come from AMS Cache itself; they are never guessed.
- * Sidecar cleanup is batched so dozens of targets require one filesystem scan.
+ * The counterpart to the 1.9.0 warmer removal above: that removal keeps
+ * dashboard writes fast by skipping AMS Cache's purge+preload callbacks
+ * entirely, which also means a dashboard publish never invalidates the WP
+ * site's own cached HTML. This endpoint restores the purge HALF only — and
+ * never the preload crawl. The editor calls it AFTER a save has returned, so
+ * nothing here costs the author's 30s write budget.
+ *
+ * REBUILT 1.17.0 on scm_purge_cache_uri(), ams-cache's own single-page purge.
+ * The 1.10.0-1.15.0 versions deleted driver keys directly and computed
+ * md5(<path>) — but the real scheme (read from the ams-cache source, kept in
+ * docs/wordpress/ams-cache.zip) is
+ *
+ *     md5( scm_get_cache_key_prefix() . '|' . <normalized path> )
+ *
+ * with a site-specific prefix (`scm_<blog_id>_<dir_hash>_`), so every guessed
+ * key named an entry that never existed: three versions of purge that matched
+ * nothing while the site served day-old HTML, which then justified 1.15.0's
+ * whole-store flush. scm_purge_cache_uri() computes the key with the plugin's
+ * own functions — it cannot mismatch — and also removes the entry's stats
+ * sidecar and nginx static copy, with zero HTTP. Per page: milliseconds.
+ *
+ * The target list is the article + homepage + its category/tag archives PLUS
+ * every published landing Page (see ams_afa_landing_page_targets — pages like
+ * /strange/ render "latest news" blocks that no post-to-page relationship
+ * records). ~60 key deletes, well under a second, all outside the write.
+ *
+ * There is deliberately NO re-warm: at ~4-7 publishes/day against ~5k
+ * visits/day, the first visitor to each purged page pays one 5-19s render and
+ * re-fills the cache — accepted 2026-08-18 in favour of keeping this simple.
+ * Purged pages serve CORRECT content immediately; cold is not stale.
+ *
+ * cached/purged are real per-page answers now (has() with the correct key
+ * before and after), because 1.10.0's bare 'OK' let a purge that never worked
+ * survive three versions unnoticed. `cached:false` just means nobody had
+ * visited that page since its last expiry — a healthy answer, not a failure.
+ *
+ * Works for TRASHED posts too (1.17.1): the dashboard calls this after a
+ * trash, and the original-path reconstruction in ams_afa_cache_purge_targets
+ * makes sure the ghost page — a cached article that no longer exists — is
+ * among what gets purged.
  */
 function ams_afa_cache_purge( WP_REST_Request $req ) {
     $post = get_post( absint( $req->get_param( 'post_id' ) ) );
@@ -1205,8 +1554,12 @@ function ams_afa_cache_purge( WP_REST_Request $req ) {
     if ( 'enable' !== get_option( 'scm_option_caching_status', 'disable' ) ) {
         return new WP_REST_Response( array( 'status' => 'SKIPPED', 'message' => 'AMS Cache page caching is disabled', 'data' => array( 'pages' => array() ) ), 200 );
     }
+
+    // The key function this endpoint is built on. Absent means the ams-cache
+    // fork on the server changed shape — say so rather than silently doing
+    // nothing (the 1.10.0 lesson, again).
     if ( ! function_exists( 'scm_get_cache_key' ) ) {
-        return new WP_REST_Response( array( 'status' => 'ERROR', 'message' => 'AMS Cache is incompatible: scm_get_cache_key is missing' ), 200 );
+        return new WP_REST_Response( array( 'status' => 'ERROR', 'message' => 'ams-cache changed: scm_get_cache_key missing — update ams-frontend-api to match' ), 200 );
     }
 
     try {
@@ -1215,26 +1568,47 @@ function ams_afa_cache_purge( WP_REST_Request $req ) {
         return new WP_REST_Response( array( 'status' => 'ERROR', 'message' => 'cache driver unavailable: ' . $e->getMessage() ), 200 );
     }
 
-    $targets = array_merge( ams_afa_cache_purge_targets( $post ), ams_afa_landing_page_targets() );
-    if ( defined( 'AMS_AFA_CACHE_FLUSH_ALL' ) && AMS_AFA_CACHE_FLUSH_ALL && ams_afa_flush_all_cache() ) {
-        $pages = array_map( function ( $target ) {
-            return array( 'url' => $target['url'], 'label' => $target['label'], 'cached' => true, 'purged' => true );
-        }, $targets );
+    /* The escape hatch, OFF by default since 1.17.0: define
+     * `AMS_AFA_CACHE_FLUSH_ALL` as true in wp-config.php and this flushes the
+     * whole store instead of the targeted purge — for the day the target list
+     * turns out to miss a surface in practice. No re-upload needed either way. */
+    $flush_all = defined( 'AMS_AFA_CACHE_FLUSH_ALL' ) && (bool) AMS_AFA_CACHE_FLUSH_ALL;
+    if ( $flush_all && ams_afa_flush_all_cache() ) {
         return new WP_REST_Response( array(
             'status' => 'OK',
-            'data'   => array( 'driver' => (string) get_option( 'scm_option_driver', 'file' ), 'flushed' => true, 'pages' => $pages ),
+            'data'   => array(
+                'driver'  => (string) get_option( 'scm_option_driver', 'file' ),
+                'flushed' => true,
+                'pages'   => array_map(
+                    function ( $t ) {
+                        return array( 'url' => $t['url'], 'label' => $t['label'], 'cached' => true, 'purged' => true );
+                    },
+                    ams_afa_cache_purge_targets( $post )
+                ),
+            ),
         ), 200 );
     }
 
-    $seen     = array();
-    $pages    = array();
-    $keys     = array();
-    $uris     = array();
+    $targets = array_merge( ams_afa_cache_purge_targets( $post ), ams_afa_landing_page_targets() );
+
+    /* BATCHED since 1.18.1. The 1.17.x loop called scm_purge_cache_uri() per
+     * target — correct, but that function does a full recursive scan of the
+     * stats sidecar tree PER CALL, and ~60 targets meant ~60 scans of the same
+     * directory. On this host that sometimes blew past the dashboard's request
+     * timeout: the purge completed while the editor was told it failed. Keys
+     * still come from scm_get_cache_key() — never guessed (the 1.10.0 lesson) —
+     * only the sidecar cleanup is batched: driver keys and nginx copies go
+     * first, then ONE walk of the stats tree removes every file matching a
+     * purged key or pointing at a purged URI (the same stale-prefix sweep
+     * scm_purge_cache_uri does per-URI). Same effects, one scan. */
+    $seen  = array();
+    $pages = array();
+    $keys  = array(); // purged cache keys  → true
+    $uris  = array(); // purged normalized paths → true
     $n_cached = 0;
     $n_purged = 0;
-
-    foreach ( $targets as $target ) {
-        $path = isset( $target['path'] ) ? $target['path'] : parse_url( $target['url'], PHP_URL_PATH );
+    foreach ( $targets as $t ) {
+        $path = isset( $t['path'] ) ? $t['path'] : parse_url( $t['url'], PHP_URL_PATH );
         $path = ( is_string( $path ) && '' !== $path ) ? $path : '/';
         $norm = function_exists( 'scm_normalize_cache_uri' ) ? scm_normalize_cache_uri( $path ) : $path;
         if ( isset( $seen[ $norm ] ) ) {
@@ -1255,57 +1629,58 @@ function ams_afa_cache_purge( WP_REST_Request $req ) {
             $keys[ $key ]  = true;
             $uris[ $norm ] = true;
         } catch ( Throwable $e ) {
-            error_log( '[ams-afa] cache purge failed for ' . $path . ': ' . $e->getMessage() );
+            // One bad entry must not abort the rest of the purge.
         }
 
         if ( function_exists( 'scm_delete_nginx_static_cache' ) ) {
             try {
                 scm_delete_nginx_static_cache( $path );
             } catch ( Throwable $e ) {
-                error_log( '[ams-afa] nginx cache purge failed for ' . $path . ': ' . $e->getMessage() );
+                // Optional layer; a miss here only leaves an nginx copy to TTL out.
             }
         }
 
         $n_cached += $cached ? 1 : 0;
         $n_purged += $purged ? 1 : 0;
+
         $pages[] = array(
-            'url'    => $target['url'],
-            'label'  => $target['label'],
+            'url'    => $t['url'],
+            'label'  => $t['label'],
             'cached' => $cached,
             'purged' => $purged,
         );
     }
 
+    // The single stats-tree sweep for everything purged above.
     if ( $keys && function_exists( 'scm_get_upload_dir' ) ) {
         $stats_root = scm_get_upload_dir() . '/stats';
         if ( is_dir( $stats_root ) ) {
             try {
-                $iterator = new RecursiveIteratorIterator(
-                    new RecursiveDirectoryIterator( $stats_root, FilesystemIterator::SKIP_DOTS )
-                );
-                foreach ( $iterator as $file ) {
+                foreach ( new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $stats_root, FilesystemIterator::SKIP_DOTS ) ) as $file ) {
                     if ( ! $file->isFile() || 'json' !== strtolower( $file->getExtension() ) ) {
                         continue;
                     }
-                    $file_key = strstr( $file->getFilename(), '.', true );
-                    $hit = isset( $keys[ $file_key ] );
+                    $fkey = strstr( $file->getFilename(), '.', true );
+                    $hit  = isset( $keys[ $fkey ] );
                     if ( ! $hit && function_exists( 'scm_read_stats_file' ) && function_exists( 'scm_normalize_cache_uri' ) ) {
+                        // Entries written under an OLDER key prefix still point
+                        // at a purged URI — drop their driver entry too.
                         $stats = scm_read_stats_file( $file->getPathname() );
                         if ( ! empty( $stats['uri'] ) && isset( $uris[ scm_normalize_cache_uri( $stats['uri'] ) ] ) ) {
                             $hit = true;
                             try {
-                                $driver->delete( $file_key );
+                                $driver->delete( $fkey );
                             } catch ( Throwable $e ) {
-                                // The stale sidecar is still removed below.
+                                // The sidecar removal below still proceeds.
                             }
                         }
                     }
                     if ( $hit ) {
-                        @unlink( $file->getPathname() ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+                        @unlink( $file->getPathname() ); // phpcs:ignore WordPress.PHP.NoSilencedErrors -- best-effort cleanup of our own sidecars.
                     }
                 }
             } catch ( Throwable $e ) {
-                error_log( '[ams-afa] cache stats sweep failed: ' . $e->getMessage() );
+                error_log( '[ams-afa] stats sweep failed: ' . $e->getMessage() );
             }
         }
     }
@@ -1319,6 +1694,132 @@ function ams_afa_cache_purge( WP_REST_Request $req ) {
             'pages'  => $pages,
         ),
     ), 200 );
+}
+
+/**
+ * The pages a post can appear on BY RELATIONSHIP, deduped by cache path: the
+ * homepage, the post's own page, and — for an article — every category it sits
+ * in plus that category's ancestors (WP archives list descendants' posts too)
+ * and its tag archives; for a program/episode, the post type archive instead.
+ * The landing Pages, which appear by TEMPLATE rather than relationship, come
+ * from ams_afa_landing_page_targets() and are merged in by the endpoint.
+ */
+function ams_afa_cache_purge_targets( $post ) {
+    $targets = array(
+        array( 'url' => home_url( '/' ), 'label' => 'Homepage' ),
+    );
+
+    $permalink = get_permalink( $post );
+    if ( $permalink && 'trash' === $post->post_status ) {
+        /* The dashboard purges AFTER a trash completes — and wp_trash_post()
+         * has renamed the slug to "<slug>__trashed" by then, so get_permalink
+         * names a path that was never cached. The stale page — now serving a
+         * DELETED article — lives at the original path; reconstruct it or this
+         * purge misses the one page a trash exists to remove. */
+        $permalink = str_replace( '__trashed', '', $permalink );
+    }
+    if ( $permalink ) {
+        $type_obj  = get_post_type_object( $post->post_type );
+        $targets[] = array(
+            'url'   => $permalink,
+            'label' => $type_obj ? $type_obj->labels->singular_name : 'Post',
+        );
+    }
+
+    if ( 'post' === $post->post_type ) {
+        $terms = get_the_terms( $post, 'category' );
+        if ( is_array( $terms ) ) {
+            $ids = array();
+            foreach ( $terms as $term ) {
+                $ids[] = (int) $term->term_id;
+                foreach ( get_ancestors( $term->term_id, 'category' ) as $anc ) {
+                    $ids[] = (int) $anc;
+                }
+            }
+            foreach ( array_unique( $ids ) as $tid ) {
+                $link = get_term_link( $tid, 'category' );
+                $term = get_term( $tid, 'category' );
+                if ( ! is_wp_error( $link ) && $term && ! is_wp_error( $term ) ) {
+                    $targets[] = array( 'url' => $link, 'label' => $term->name );
+                }
+            }
+        }
+
+        // Tag archives list the post just as directly as category archives do.
+        $tags = get_the_terms( $post, 'post_tag' );
+        if ( is_array( $tags ) ) {
+            foreach ( $tags as $tag ) {
+                $link = get_term_link( $tag );
+                if ( ! is_wp_error( $link ) ) {
+                    $targets[] = array( 'url' => $link, 'label' => $tag->name );
+                }
+            }
+        }
+    } else {
+        $archive = get_post_type_archive_link( $post->post_type );
+        if ( $archive ) {
+            $targets[] = array( 'url' => $archive, 'label' => 'Archive' );
+        }
+
+        /* MasVideos programs are a linked FAMILY (1.17.2): a movie fronts its
+         * episode-container show (`_khi_tv_show_id`), episodes point at that
+         * show (`_tv_show_id`), and the show's WP page lists the episodes. A
+         * write to any member goes stale on the others' pages — an added
+         * episode is exactly the kind of change the show and movie pages
+         * exist to display — so the whole family is purged. At most two
+         * extra pages. */
+        $show_id = 0;
+        if ( 'episode' === $post->post_type ) {
+            $show_id = (int) get_post_meta( $post->ID, '_tv_show_id', true );
+        } elseif ( 'movie' === $post->post_type ) {
+            $show_id = (int) get_post_meta( $post->ID, '_khi_tv_show_id', true );
+        } elseif ( 'tv_show' === $post->post_type ) {
+            $show_id = $post->ID;
+        }
+
+        if ( $show_id > 0 ) {
+            if ( 'tv_show' !== $post->post_type ) {
+                $show_url = get_permalink( $show_id );
+                if ( $show_url ) {
+                    // A program trash trashes its container too — same
+                    // renamed-slug problem as the post itself above.
+                    $targets[] = array( 'url' => str_replace( '__trashed', '', $show_url ), 'label' => get_the_title( $show_id ) );
+                }
+            }
+            if ( 'movie' !== $post->post_type ) {
+                // The movie fronting this show — reverse of `_khi_tv_show_id`.
+                $movie_ids = get_posts( array(
+                    'post_type'     => 'movie',
+                    'post_status'   => 'publish',
+                    'numberposts'   => 1,
+                    'fields'        => 'ids',
+                    'no_found_rows' => true,
+                    'meta_key'      => '_khi_tv_show_id',
+                    'meta_value'    => $show_id,
+                ) );
+                foreach ( $movie_ids as $mid ) {
+                    $movie_url = get_permalink( $mid );
+                    if ( $movie_url ) {
+                        $targets[] = array( 'url' => $movie_url, 'label' => get_the_title( $mid ) );
+                    }
+                }
+            }
+        }
+    }
+
+    $seen = array();
+    $out  = array();
+    foreach ( $targets as $t ) {
+        $path = parse_url( $t['url'], PHP_URL_PATH );
+        $path = ( is_string( $path ) && '' !== $path ) ? $path : '/';
+        if ( isset( $seen[ $path ] ) ) {
+            continue;
+        }
+        $seen[ $path ] = true;
+        $t['path']     = $path;
+        $out[]         = $t;
+    }
+    return $out;
 }
 
 /* --- Settings screen (Settings → Frontend Cache) --- */
@@ -1343,9 +1844,8 @@ add_action( 'admin_init', function () {
 
 function ams_afa_sanitize_revalidate( $input ) {
     return array(
-        'url'           => isset( $input['url'] ) ? esc_url_raw( trim( (string) $input['url'] ) ) : '',
-        'secret'        => isset( $input['secret'] ) ? trim( (string) $input['secret'] ) : '',
-        'vercel_bypass' => isset( $input['vercel_bypass'] ) ? trim( (string) $input['vercel_bypass'] ) : '',
+        'url'    => isset( $input['url'] ) ? esc_url_raw( trim( (string) $input['url'] ) ) : '',
+        'secret' => isset( $input['secret'] ) ? trim( (string) $input['secret'] ) : '',
     );
 }
 
@@ -1371,11 +1871,8 @@ function ams_afa_revalidate_settings_page() {
                         <input type="url" id="ams-afa-reval-url" class="regular-text" style="width:480px"
                                name="<?php echo esc_attr( AMS_AFA_REVALIDATE_OPTION ); ?>[url]"
                                value="<?php echo esc_attr( $cfg['url'] ); ?>"
-                               placeholder="https://ams-economy-frontend.vercel.app/api/revalidate" />
-                        <p class="description">
-                            Use the public production deployment's <code>/api/revalidate</code> route.
-                            Preview/branch deployments have separate caches.
-                        </p>
+                               placeholder="https://ams-infotainment-frontend.vercel.app/api/revalidate" />
+                        <p class="description">The frontend's <code>/api/revalidate</code> route.</p>
                     </td>
                 </tr>
                 <tr>
@@ -1386,20 +1883,7 @@ function ams_afa_revalidate_settings_page() {
                                value="<?php echo esc_attr( $cfg['secret'] ); ?>" />
                         <p class="description">
                             Must equal the frontend's <code>REVALIDATE_SECRET</code> environment
-                            variable in the same deployment (Vercel → Project Settings → Environment Variables).
-                        </p>
-                    </td>
-                </tr>
-                <tr>
-                    <th scope="row"><label for="ams-afa-vercel-bypass">Vercel protection bypass</label></th>
-                    <td>
-                        <input type="password" id="ams-afa-vercel-bypass" class="regular-text" autocomplete="off"
-                               name="<?php echo esc_attr( AMS_AFA_REVALIDATE_OPTION ); ?>[vercel_bypass]"
-                               value="<?php echo esc_attr( $cfg['vercel_bypass'] ); ?>" />
-                        <p class="description">
-                            Optional. Required when the webhook URL is protected by Vercel Authentication.
-                            Paste the project's Protection Bypass for Automation secret; it is sent only in
-                            the <code>x-vercel-protection-bypass</code> request header.
+                            variable (Dokploy → the app → Environment).
                         </p>
                     </td>
                 </tr>
@@ -1556,6 +2040,83 @@ function ams_afa_register_menu_icon_meta() {
     }
 }
 add_action( 'init', 'ams_afa_register_menu_icon_meta' );
+
+/* ───────────────────────────── Profile avatar ─────────────────────────────── */
+
+/**
+ * `ams_avatar` — the dashboard profile picture, as a REST field on `user`
+ * (since 1.20.0), so it rides the same GET/POST wp/v2/users/me the profile
+ * screen already uses.
+ *
+ * Core has no uploadable avatar: `avatar_urls` is an md5-of-email Gravatar and
+ * no account on this site has one set. So the picture is an ATTACHMENT the
+ * dashboard uploads through wp/v2/media, referenced from two user-meta keys:
+ *
+ *   ams_avatar_id    the attachment id — the durable reference
+ *   ams_avatar_url   the rendition URL, resolved HERE at write time
+ *
+ * The URL is STORED rather than derived on read because the fast path serves
+ * the profile under SHORTINIT, where the media-offload filters that produce
+ * the real s3.ams.com.kh file URL never run. Resolving once in full-WordPress
+ * context and storing the result gives every reader — core REST and fast.php
+ * alike — the same plain string, no filter machinery required. The trade-off
+ * (a regenerated/moved rendition would leave the stored URL stale) heals on
+ * the next avatar save, and avatars change far more often than media moves.
+ *
+ * Write contract (POST wp/v2/users/me): `ams_avatar: { id: <attachment id> }`
+ * sets it, `{ id: 0 }` clears it. No extra capability gate: the users
+ * controller has already verified the caller may edit the target user before
+ * update_callback runs (own profile always passes; other people's need
+ * edit_users, exactly as core intends).
+ */
+function ams_afa_user_avatar_read( $user_arr ) {
+    $uid = (int) $user_arr['id'];
+    $id  = (int) get_user_meta( $uid, 'ams_avatar_id', true );
+    $url = (string) get_user_meta( $uid, 'ams_avatar_url', true );
+    return ( $id > 0 && '' !== $url ) ? array( 'id' => $id, 'url' => $url ) : null;
+}
+
+function ams_afa_user_avatar_write( $value, $user ) {
+    $id = absint( is_array( $value ) ? ( isset( $value['id'] ) ? $value['id'] : 0 ) : $value );
+
+    if ( 0 === $id ) {
+        delete_user_meta( $user->ID, 'ams_avatar_id' );
+        delete_user_meta( $user->ID, 'ams_avatar_url' );
+        return true;
+    }
+
+    // A real image attachment or nothing — a bare post id would store fine and
+    // render a broken <img> forever (same rule as the menu-icon sanitizer).
+    if ( 'attachment' !== get_post_type( $id ) || ! wp_attachment_is_image( $id ) ) {
+        return new WP_Error( 'ams_afa_bad_avatar', 'ams_avatar.id must be an image attachment.', array( 'status' => 400 ) );
+    }
+
+    // 150px cropped square; an original too small to have renditions falls
+    // back to the file itself.
+    $src = wp_get_attachment_image_src( $id, 'thumbnail' );
+    if ( ! $src ) {
+        $src = wp_get_attachment_image_src( $id, 'full' );
+    }
+    if ( ! $src || empty( $src[0] ) ) {
+        return new WP_Error( 'ams_afa_bad_avatar', 'The attachment has no resolvable image URL.', array( 'status' => 400 ) );
+    }
+
+    update_user_meta( $user->ID, 'ams_avatar_id', $id );
+    update_user_meta( $user->ID, 'ams_avatar_url', esc_url_raw( $src[0] ) );
+    return true;
+}
+
+add_action( 'rest_api_init', function () {
+    register_rest_field( 'user', 'ams_avatar', array(
+        'get_callback'    => 'ams_afa_user_avatar_read',
+        'update_callback' => 'ams_afa_user_avatar_write',
+        'schema'          => array(
+            'description' => 'Dashboard profile picture: { id, url } or null. Write { id } to set, { id: 0 } to clear.',
+            'type'        => array( 'object', 'null' ),
+            'context'     => array( 'view', 'edit', 'embed' ),
+        ),
+    ) );
+} );
 
 /**
  * Program capabilities, answered at runtime via `user_has_cap` (since 1.7.2).
@@ -1869,47 +2430,28 @@ add_action( 'rest_api_init', function () {
     ) );
 } );
 
-/**
- * A login failure whose meaning survives this host's error-page interception.
- *
- * GCX replaces WordPress 4xx responses (status and body) with a generic HTML
- * 404. Keep the transport status at 200 and carry the semantic status in JSON
- * so the login form can distinguish credentials, access and throttling errors.
- */
-function ams_afa_login_error( $code, $message, $http_status, $retry_after = 0 ) {
-    $resp = new WP_REST_Response( array(
-        'status'      => 'error',
-        'code'        => (string) $code,
-        'message'     => (string) $message,
-        'http_status' => (int) $http_status,
-    ), 200 );
-    if ( $retry_after > 0 ) {
-        $resp->header( 'Retry-After', (string) $retry_after );
-    }
-    return $resp;
-}
-
 function ams_afa_login( $request ) {
     if ( AMS_AFA_LOGIN_REQUIRE_SSL && ! ams_afa_login_is_secure() ) {
-        return ams_afa_login_error( 'insecure', 'Login requires HTTPS.', 400 );
+        return new WP_Error( 'ams_afa_insecure', 'Login requires HTTPS.', array( 'status' => 400 ) );
     }
 
     // Throttle first — a locked-out IP never reaches wp_authenticate().
     $throttle_key = ams_afa_login_throttle_key();
     $fails        = (int) get_transient( $throttle_key );
     if ( $fails >= AMS_AFA_LOGIN_MAX_FAILS ) {
-        return ams_afa_login_error(
-            'too_many_attempts',
-            'Too many failed attempts. Try again later.',
-            429,
-            AMS_AFA_LOGIN_LOCKOUT
-        );
+        $resp = new WP_REST_Response( array(
+            'status'  => 'error',
+            'code'    => 'too_many_attempts',
+            'message' => 'Too many failed attempts. Try again later.',
+        ), 429 );
+        $resp->header( 'Retry-After', (string) AMS_AFA_LOGIN_LOCKOUT );
+        return $resp;
     }
 
     $username = trim( (string) $request->get_param( 'username' ) );
     $password = (string) $request->get_param( 'password' );
     if ( '' === $username || '' === $password ) {
-        return ams_afa_login_error( 'bad_request', 'Username and password are required.', 400 );
+        return new WP_Error( 'ams_afa_bad_request', 'Username and password are required.', array( 'status' => 400 ) );
     }
 
     $user = wp_authenticate( $username, $password );
@@ -1918,13 +2460,13 @@ function ams_afa_login( $request ) {
         // Count the failure; answer with ONE generic message so the response
         // never reveals whether the username exists.
         set_transient( $throttle_key, $fails + 1, AMS_AFA_LOGIN_LOCKOUT );
-        return ams_afa_login_error( 'invalid_login', 'Invalid username or password.', 401 );
+        return new WP_Error( 'ams_afa_invalid_login', 'Invalid username or password.', array( 'status' => 401 ) );
     }
 
     if ( ! ams_afa_login_has_access( $user ) ) {
         // Valid credentials, but nothing to do here. Don't count it as a brute-
         // force failure, but don't hand out a token either.
-        return ams_afa_login_error( 'no_access', 'This account has no dashboard access.', 403 );
+        return new WP_Error( 'ams_afa_no_access', 'This account has no dashboard access.', array( 'status' => 403 ) );
     }
 
     delete_transient( $throttle_key ); // clean slate on success
@@ -2010,11 +2552,88 @@ function ams_afa_slider_alias( $raw ) {
  * elements — it has the slider's body and none of its runtime.
  */
 function ams_afa_render_embed( $alias ) {
+    /* A frame is not a page — strip the site's ad furniture ──────────────────
+     *
+     * wp_head()/wp_footer() are called below for ONE reason: they emit Slider
+     * Revolution's runtime. But EVERY other plugin hooked there fires too, and
+     * AMS Ads Manager (ams-msa-popup) hooks both — so the MSA/Damrei popup was
+     * booting INSIDE the hero iframe. Sealed in a 100%-wide, overflow:hidden
+     * frame it can never reach the page it exists to cover; it just sat on top
+     * of the slider, and counted impressions against a surface no visitor could
+     * act on. Same for every article slider, since /sr-embed shares this
+     * renderer.
+     *
+     * Removed by hook here rather than by teaching the ads plugin what an embed
+     * is: this route is what decides a frame carries a slider and nothing else,
+     * and remove_action() against an absent plugin is a harmless no-op — so
+     * this holds whether or not the ads plugin is installed, with no coupling
+     * in the other direction.
+     *
+     * Priorities must match the add_action() calls exactly (1 and 20) or the
+     * removal silently does nothing.
+     *
+     * Deliberately surgical: dropping every wp_head hook would take Slider
+     * Revolution's own runtime with it and leave an empty frame.
+     */
+    remove_action( 'wp_head', 'ams_msa_popup_head', 1 );
+    remove_action( 'wp_footer', 'ams_msa_popup_footer', 20 );
+
     // Let the whitelisted frontend origins iframe this page (override any
     // X-Frame-Options a security plugin may have set).
+    //
+    // Headers are ALWAYS sent fresh, never served from the cache below — so the
+    // frame-ancestors list takes effect the moment the plugin updates, even
+    // while cached HTML is still being served.
     header_remove( 'X-Frame-Options' );
     header( "Content-Security-Policy: frame-ancestors 'self' " . implode( ' ', ams_afa_embed_origins() ) );
     status_header( 200 );
+
+    /* ────────── Cache the rendered frame (1.12.0) ───────────────────────────
+     *
+     * Measured before this: TTFB 3.73s on /hero-embed against 0.08s on the
+     * cached WP homepage — 44× slower, on the same box. Almost none of that is
+     * the slider or the network (transfer is ~250ms); it is WordPress booting
+     * the full plugin/theme stack to answer, on EVERY view, because this route
+     * sends no-store and AMS Cache therefore skips it.
+     *
+     * WHY NOT JUST LET AMS CACHE HAVE IT: Cache Master keys entries on
+     * md5(<URL path>) with NO query string (Session 34). Both embed routes vary
+     * only by ?alias=, so every alias would collide on ONE entry — landing
+     * pages serving each other's heroes, and every article slider serving
+     * whichever module was rendered first. That is a worse bug than slowness,
+     * so we cache per-alias ourselves and keep the page cache off the route via
+     * DONOTCACHEPAGE (respected by AMS Cache's upstream and every common fork).
+     *
+     * `private` on the browser header is the same defence one layer out: it
+     * lets the visitor's own browser reuse the frame, while forbidding any
+     * shared proxy from storing a document whose URL-path alone does not
+     * identify it.
+     *
+     * The key carries the plugin version, so an upgrade invalidates every entry
+     * — which is what keeps AMS_PARENTS (baked into this HTML, unlike the
+     * header above) from going stale across a deploy.
+     *
+     * Logged-in users bypass entirely: wp_head() emits the admin bar and
+     * user-specific nonces for them, none of which belongs in a shared entry.
+     */
+    if ( ! defined( 'DONOTCACHEPAGE' ) ) {
+        define( 'DONOTCACHEPAGE', true );
+    }
+
+    $cacheable = ! is_user_logged_in();
+    $cache_key = 'ams_afa_embed_' . md5( $alias . '|' . AMS_AFA_VERSION );
+
+    if ( $cacheable ) {
+        $cached = get_transient( $cache_key );
+        if ( is_string( $cached ) && $cached !== '' ) {
+            header( 'Cache-Control: private, max-age=' . AMS_AFA_EMBED_BROWSER_TTL );
+            header( 'X-AMS-Embed-Cache: HIT' );
+            echo $cached; // phpcs:ignore WordPress.Security.EscapeOutput -- stored output of this same renderer.
+            exit;
+        }
+    }
+
+    ob_start();
 
     ?><!doctype html>
 <html <?php language_attributes(); ?>>
@@ -2142,6 +2761,18 @@ function ams_afa_render_embed( $alias ) {
     </script>
 </body>
 </html><?php
+    $html = ob_get_clean();
+
+    // Store only a plausible render. A truncated buffer (fatal mid-page, OOM)
+    // would otherwise be pinned for the whole TTL and serve a broken frame to
+    // everyone — the failure this cache could most easily cause.
+    if ( $cacheable && strlen( $html ) > 1024 && stripos( $html, '</html>' ) !== false ) {
+        set_transient( $cache_key, $html, AMS_AFA_EMBED_TTL );
+    }
+
+    header( 'Cache-Control: private, max-age=' . AMS_AFA_EMBED_BROWSER_TTL );
+    header( 'X-AMS-Embed-Cache: MISS' );
+    echo $html; // phpcs:ignore WordPress.Security.EscapeOutput -- assembled above.
     exit;
 }
 

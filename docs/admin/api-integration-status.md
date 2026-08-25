@@ -15,7 +15,9 @@ one page is everything. Nothing loads a whole 10k+ table.
 
 **Status:** ✅ done & verified · 🟡 built, not yet UI-tested · ⬜ not started · ⛔ blocked (WP-side work) · ➖ deferred by choice
 
-_Last updated: 2026-07-31 (unattended "replace wp-admin" session). Done: auth, Articles (list + filters + editor incl. **TipTap body**), Dashboard, Users (+ **create**), Media (+ **alt edit / delete / upload**), Programs list + editor + **dynamic public registry** + **Create Program**, Category/Tag managers, Settings, Profile. Everything from this session is 🟡 (built + build-passes, browser-unverified) — details in session-log.md §5._
+_Last updated: 2026-08-17 (Session 34 — legacy-site cache refresh row; see session-log.md)._
+
+_Previous: 2026-07-31 (unattended "replace wp-admin" session). Done: auth, Articles (list + filters + editor incl. **TipTap body**), Dashboard, Users (+ **create**), Media (+ **alt edit / delete / upload**), Programs list + editor + **dynamic public registry** + **Create Program**, Category/Tag managers, Settings, Profile. Everything from this session is 🟡 (built + build-passes, browser-unverified) — details in session-log.md §5._
 
 ## Foundation & Auth
 
@@ -25,6 +27,7 @@ _Last updated: 2026-07-31 (unattended "replace wp-admin" session). Done: auth, A
 | Login | `POST wp/v2/web/login` | R | ✅ | Browser-confirmed |
 | Session / current user | `GET wp/v2/web/me` | R | ✅ | Drives role gating |
 | Logout | cookie clear (no API) | — | ✅ | |
+| Legacy-site cache refresh | `POST wp/v2/web/cache/purge` (afa 1.10.0) | W | ⛔ | Post-publish purge + browser re-warm with progress chip (articles + programs). Frontend built; **blocked on uploading the 1.10.0 plugin zip** |
 
 ## Articles (Posts) — the one fully-writable type
 
@@ -65,7 +68,8 @@ _Last updated: 2026-07-31 (unattended "replace wp-admin" session). Done: auth, A
 | Feature | Endpoint / method | R/W | Status | Notes |
 |---|---|---|---|---|
 | Grid + search + type filter + detail drawer | `GET wp/v2/media` | R | ✅ | Verified — 115,259 items, paginated |
-| Upload | browser → `/api/admin/upload` → `POST wp/v2/media` (raw body) | W | ✅ | Browser-verified incl. s3 offload. Route Handler on purpose — Server Actions 500 on File payloads |
+| Upload (images) | browser → `/api/admin/upload` → `POST wp/v2/media` (raw body) | W | ✅ | Browser-verified incl. s3 offload. Route Handler on purpose — Server Actions 500 on File payloads |
+| Upload (video ≤300MB / audio ≤50MB) | same route, per-type caps + 10-min timeout | W | 🟡 | Built 2026-08-17, not live-tested; the host's PHP `upload_max_filesize` is unknown and wins — a 413 means aaPanel config, not code |
 | Edit alt / delete | `POST/DELETE wp/v2/media/{id}` | W | 🟡 | Drawer edits alt (images) + permanent delete w/ confirm (no REST trash) |
 | "Own files only" for non-admins | query scoping | R | ⬜ | Default WP shows all |
 
@@ -81,12 +85,19 @@ _Last updated: 2026-07-31 (unattended "replace wp-admin" session). Done: auth, A
 
 ## Dashboard (home)
 
+One fast-path request (`fast.php?r=dashboard`, plugin 1.6.0+) serves the whole
+screen; the rows below are the REST fallbacks each widget degrades to.
+
 | Feature | Endpoint / method | R/W | Status | Notes |
 |---|---|---|---|---|
-| Content counts (My / Published / Drafts / Pending) | `GET wp/v2/posts?per_page=1` (`X-WP-Total`) | R | ✅ | Verified live |
-| Top performing (real pageviews) | `GET wordpress-popular-posts/v1/popular-posts` | R | ✅ | Verified — real WPP views |
-| Recent activity | `GET wp/v2/posts?orderby=modified` | R | ✅ | Verified |
-| Views time-series chart / sparklines | — | R | ➖ | Removed — WPP has no site-wide daily series; revisit with a real analytics source |
+| Queue / KPI counts (Needs you, Stories published) | `GET wp/v2/posts?per_page=1` (`X-WP-Total`) | R | ✅ | Verified live |
+| Top performing (real pageviews) | `GET wordpress-popular-posts/v1/popular-posts` (last30days) | R | ✅ | Verified — real WPP views |
+| Trending now (24-hour pageviews) | `GET wordpress-popular-posts/v1/popular-posts` (last24hours) | R | 🟡 | Plugin 1.7.0 `trending` field; fixed window, ignores the range control |
+| Today so far (views vs yesterday same-time, posts today, top of the hour) | fast path only (plugin 1.8.0 `today`, 120s memo) | R | 🟡 | No REST equivalent of the same-clock-time comparison — fallback shows the cell as unavailable |
+| Comments awaiting moderation (Needs you row) | fast path only (plugin 1.8.0 `queue.comments`) | R | ⏸ | Data flows; the row's JSX is PARKED (commented in DashboardScreen, owner decision 2026-08-16) |
+| Custom chart window (from/to date pair) | fast path only (plugin 1.8.0 `?from/?to`, clamped to 90 days ending today) | R | 🟡 | Scopes series/top/leaderboard; KPIs stay pinned via a 14-day mini-series; fallback degrades to the 30-day preset |
+| Recent activity | `GET wp/v2/posts?orderby=modified` | R | ✅ | Verified; fallback is articles-only (fast path unions programs/episodes) |
+| Views time-series chart / sparklines | fast path only (WPP summary table via SQL) | R | ✅ | 1.6.0 daily series; no REST equivalent — chart explains itself on fallback |
 
 ## WP-side prerequisites (block their rows)
 

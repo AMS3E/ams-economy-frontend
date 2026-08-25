@@ -72,7 +72,7 @@ define( 'AUTH_SALT', 's4lt-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 /** Stub, defined BEFORE fast.php so its function_exists() guards see it —
  *  only the options ams_fast_permalink() reads. */
 function get_option( $name, $default = false ) {
-	$fixture = array( 'home' => 'https://economy.ams.com.kh/' );
+	$fixture = array( 'home' => 'https://infotainment.ams.com.kh/' );
 	return isset( $fixture[ $name ] ) ? $fixture[ $name ] : $default;
 }
 
@@ -273,14 +273,14 @@ t_ok( ! in_array( 'inherit', ams_fast_known_statuses(), true ), 'inherit (attach
  * 6. ATTACHMENT URLS — the KH Offloader branch
  *
  * Shapes taken from the live site: uploads live at
- * https://s3.ams.com.kh/economy/2026/08/<file> when offloaded, and 642 of
+ * https://s3.ams.com.kh/infotainment/2026/08/<file> when offloaded, and 642 of
  * 115,405 attachments are NOT offloaded and must stay local.
  * ------------------------------------------------------------------------ */
 
 t_group( '6. attachment URL resolution' );
 
-$LOCAL = 'https://economy.ams.com.kh/wp-content/uploads';
-$CDN   = 'https://s3.ams.com.kh/economy';
+$LOCAL = 'https://infotainment.ams.com.kh/wp-content/uploads';
+$CDN   = 'https://s3.ams.com.kh/infotainment';
 
 $meta_full = serialize( array(
 	'file'  => '2026/08/fake-perfume.webp',
@@ -295,7 +295,7 @@ $offloaded = array(
 	'_wp_attached_file'         => '2026/08/fake-perfume.webp',
 	'_wp_attachment_metadata'   => $meta_full,
 	'_khs3data_webp_size_files' => serialize( array( 'fake-perfume-150x150.webp' ) ),
-	'khs3data_bucket'           => 'economy',
+	'khs3data_bucket'           => 'infotainment',
 	'khs3data_offloaded'        => '1',
 	'khs3data_offloaded_at'     => '1785815550',
 	'khs3data_path'             => '2026/08/',
@@ -350,7 +350,7 @@ t_same(
 $legacy_wpom = array(
 	'_wp_attached_file'       => '2019/03/legacy.jpg',
 	'_wp_attachment_metadata' => serialize( array( 'sizes' => array( 'thumbnail' => array( 'file' => 'legacy-150x150.jpg' ) ) ) ),
-	'amazonS3_info'           => serialize( array( 'bucket' => 'economy', 'key' => '2019/03/legacy.jpg', 'provider' => 'CephAMS' ) ),
+	'amazonS3_info'           => serialize( array( 'bucket' => 'infotainment', 'key' => '2019/03/legacy.jpg', 'provider' => 'CephAMS' ) ),
 );
 t_same(
 	$CDN . '/2019/03/legacy-150x150.jpg',
@@ -362,7 +362,7 @@ t_same( 'amazonS3_info', $how, '...resolved by the legacy branch' );
 $stored_url = array(
 	'_wp_attached_file'       => '2026/08/stored.webp',
 	'_wp_attachment_metadata' => serialize( array( 'sizes' => array( 'thumbnail' => array( 'file' => 'stored-150x150.webp' ) ) ) ),
-	'some_plugin_url'         => 'https://s3.ams.com.kh/economy/2026/08/stored.webp',
+	'some_plugin_url'         => 'https://s3.ams.com.kh/infotainment/2026/08/stored.webp',
 );
 t_same(
 	$CDN . '/2026/08/stored-150x150.webp',
@@ -519,8 +519,8 @@ t_same( 1, $counts['seo_manager'], 'a user with two roles counts in BOTH (count_
 
 t_group( '6e. permalinks' );
 
-t_same( 'https://economy.ams.com.kh/?p=221956', ams_fast_permalink( 221956 ), 'permalink uses the resolvable ?p= form' );
-t_same( 'https://economy.ams.com.kh/?p=1', ams_fast_permalink( '1' ), 'a numeric string id is coerced' );
+t_same( 'https://infotainment.ams.com.kh/?p=221956', ams_fast_permalink( 221956 ), 'permalink uses the resolvable ?p= form' );
+t_same( 'https://infotainment.ams.com.kh/?p=1', ams_fast_permalink( '1' ), 'a numeric string id is coerced' );
 t_ok( false === strpos( ams_fast_permalink( 5 ), '//?p=' ), 'the home option trailing slash does not double up' );
 
 /* ---------------------------------------------------------------------------
@@ -647,11 +647,11 @@ $lk_table = array(
 	'category/orphan/'                  => array( 'kind' => 'category' ),
 	'category/broken/'                  => 'not-an-array',
 );
-$lk = ams_fast_term_links( $lk_terms, $lk_table, 'https://economy.ams.com.kh/', '' );
-t_same( 'https://economy.ams.com.kh/category/celebrity/news/', $lk[959], 'custom permalink wins over the parent chain' );
-t_same( 'https://economy.ams.com.kh/category/entertainment-news/news/', $lk[957], 'FIRST table row wins on a duplicate id' );
-t_same( 'https://economy.ams.com.kh/category/all-news/', $lk[6913], 'no custom row: root falls back to /category/<slug>/' );
-t_same( 'https://economy.ams.com.kh/category/reports/', $lk[971], 'second root also derives' );
+$lk = ams_fast_term_links( $lk_terms, $lk_table, 'https://infotainment.ams.com.kh/', '' );
+t_same( 'https://infotainment.ams.com.kh/category/celebrity/news/', $lk[959], 'custom permalink wins over the parent chain' );
+t_same( 'https://infotainment.ams.com.kh/category/entertainment-news/news/', $lk[957], 'FIRST table row wins on a duplicate id' );
+t_same( 'https://infotainment.ams.com.kh/category/all-news/', $lk[6913], 'no custom row: root falls back to /category/<slug>/' );
+t_same( 'https://infotainment.ams.com.kh/category/reports/', $lk[971], 'second root also derives' );
 
 // The fallback walks the whole parent chain when there is no custom row.
 $lk2 = ams_fast_term_links( $lk_terms, array(), 'https://x.test', 'category' );
@@ -704,12 +704,12 @@ $md = ams_fast_media_details(
 		'khs3data_offloaded'      => '1',
 		'khs3data_path'           => '2021/09/',
 	),
-	'https://economy.ams.com.kh/wp-content/uploads'
+	'https://infotainment.ams.com.kh/wp-content/uploads'
 );
-t_same( 'https://s3.ams.com.kh/economy/2021/09/poster.jpg', $md['source_url'], 'offloaded original resolves to the CDN' );
+t_same( 'https://s3.ams.com.kh/infotainment/2021/09/poster.jpg', $md['source_url'], 'offloaded original resolves to the CDN' );
 t_same( 1000, $md['width'], 'original width' );
 t_same( 1500, $md['height'], 'original height' );
-t_same( 'https://s3.ams.com.kh/economy/2021/09/poster-300x450.jpg', $md['sizes']['khi-poster']['source_url'], 'the 300x450 rendition posterOf() prefers' );
+t_same( 'https://s3.ams.com.kh/infotainment/2021/09/poster-300x450.jpg', $md['sizes']['khi-poster']['source_url'], 'the 300x450 rendition posterOf() prefers' );
 t_same( 450, $md['sizes']['khi-poster']['height'], 'rendition dims carried' );
 t_ok( ! isset( $md['sizes']['corrupt-nofile'] ), 'a size row with no file is dropped, not emitted as a broken URL' );
 
@@ -718,9 +718,9 @@ $md_local = ams_fast_media_details(
 		'_wp_attached_file'       => '2021/09/poster.jpg',
 		'_wp_attachment_metadata' => $md_attmeta,
 	),
-	'https://economy.ams.com.kh/wp-content/uploads'
+	'https://infotainment.ams.com.kh/wp-content/uploads'
 );
-t_same( 'https://economy.ams.com.kh/wp-content/uploads/2021/09/poster.jpg', $md_local['source_url'], 'a never-offloaded file stays on the local uploads base' );
+t_same( 'https://infotainment.ams.com.kh/wp-content/uploads/2021/09/poster.jpg', $md_local['source_url'], 'a never-offloaded file stays on the local uploads base' );
 
 t_same( null, ams_fast_media_details( array(), 'https://x.test/uploads' ), 'no _wp_attached_file -> null (registry renders no poster)' );
 
@@ -756,7 +756,6 @@ t_same( array( 'a' => 1 ), ams_fast_unserialize( serialize( array( 'a' => 1 ) ) 
 
 $menus = ams_fast_public_menus();
 t_ok( is_array( $menus ) && count( $menus ) > 0, 'pub-menu: the allow-list is a non-empty array' );
-t_ok( in_array( 'secondary-nav-v3-menu', $menus, true ), 'pub-menu: the Economy program-icon strip is allowed' );
 t_ok( in_array( 'ams-infotainment-third-menu', $menus, true ), 'pub-menu: the program-icon strip is allowed' );
 t_ok( ! in_array( 'primary-menu', $menus, true ), 'pub-menu: an unlisted menu is NOT allowed' );
 t_ok( ! in_array( '', $menus, true ), 'pub-menu: the empty slug is not allowed (a missing ?menu= must 404)' );
@@ -789,7 +788,7 @@ $live_menu_meta = array(
 	'_menu_item_target'               => '',
 	'_menu_item_classes'              => 'a:1:{i:0;s:0:"";}',
 	'_menu_item_xfn'                  => '',
-	'_menu_item_url'                  => 'https://economy.ams.com.kh/tv-show/',
+	'_menu_item_url'                  => 'https://infotainment.ams.com.kh/tv-show/',
 	'_menu_item_icon'                 => '',         // the plugin's icon-CLASS field: EMPTY
 	'_menu_item_image_type'           => 'image',
 	'_menu_item_image_size'           => 'menu-36x36',

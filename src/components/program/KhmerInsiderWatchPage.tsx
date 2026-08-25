@@ -1,4 +1,6 @@
 import { css } from "@/styled-system/css";
+import ReviveAdSlot from "@/components/ads/revive/ReviveAdSlot";
+import { reviveFullLandscape } from "@/components/ads/revive/zones";
 import CoverImage from "@/components/ui/CoverImage";
 import EpisodePlayer from "@/components/episode/EpisodePlayer";
 import EpisodePosterPlayer from "./EpisodePosterPlayer";
@@ -28,6 +30,7 @@ const columns = css({
 const playerArea = css({ gridArea: "player", minWidth: 0 });
 const sidebarArea = css({ gridArea: "sidebar", minWidth: 0 });
 const extraArea = css({ gridArea: "extra", minWidth: 0 });
+const fullLandscapeAd = css({ marginTop: { base: "24px", md: "44px" } });
 const videoTitle = css({
   margin: "12px 0 0",
   fontWeight: 400,
@@ -141,6 +144,10 @@ export default function KhmerInsiderWatchPage({
             </div>
           </section>
         </div>
+      </div>
+
+      <div className={fullLandscapeAd}>
+        <ReviveAdSlot zone={reviveFullLandscape} />
       </div>
     </div>
   );
