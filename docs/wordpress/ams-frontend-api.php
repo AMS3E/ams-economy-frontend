@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AMS Frontend API
  * Description: General-purpose endpoints for the AMS Infotainment Next.js frontend (add new ones here as needed). Read-only + a standalone hero-slider embed + the homepage featured-program picker + anonymous REST commenting + per-user login tokens for authenticated writes + program custom-meta exposed to REST + skips AMS Cache's synchronous page warmer on dashboard writes (96s -> under 1s). Self-contained — deactivate/delete anytime with zero effect on anything else.
- * Version:     1.20.1
+ * Version:     1.20.5
  * Author:      Soth Kimleng
  *
  * Standalone "add endpoints as needed" API file, separate from the legacy
@@ -114,6 +114,33 @@
  *        from — sorted by season and episode number, with the episode's
  *        `_tv_show_season_id` index kept true. Trash/delete/untrash maintain
  *        it too. See ams_afa_sync_show_seasons.
+ *        1.20.2 adds an authenticated `web/episode/sync` repair endpoint so
+ *        the dashboard verifies this second write explicitly instead of
+ *        trusting that the insert hook ran.
+ *        1.20.3 makes trash/delete reconciliation remove-only: deleting an
+ *        episode cannot shift season indexes, so it no longer scans and
+ *        rewrites every remaining episode before WordPress can finish trashing.
+ *        1.20.4 fixes a fatal this exposed: a brand-new season entry (created
+ *        the first time an episode's label names a season number the show
+ *        doesn't have yet) never carried a `position` key. MasVideos's own
+ *        MasVideos_TV_Show::set_seasons() runs on every read of the show —
+ *        wp-admin's TV Shows list included — and does
+ *        array_multisort(array_column($seasons, 'position'), SORT_ASC, $seasons);
+ *        array_column() silently drops entries missing that key rather than
+ *        padding them, so one seasonless entry makes the plucked column
+ *        shorter than $seasons and array_multisort() fatals with "Array sizes
+ *        are inconsistent" — for every row in the list, not just the show that
+ *        triggered it. ams_afa_sync_show_seasons now backfills `position` on
+ *        every entry unconditionally (self-healing already-corrupted shows on
+ *        their next trash/create/update) and keeps it aligned with the
+ *        season-number order it computes on create/update.
+ *        1.20.5 primes the post-meta cache for every episode in the show
+ *        before the `_tv_show_season_id` drift check, instead of one
+ *        get_post_meta()/update_post_meta() round trip per episode. On a
+ *        100-episode show that step alone was up to 100 uncached meta
+ *        lookups per sync call — plausibly why `web/episode/sync` was still
+ *        timing out for Khmer Insider even after the frontend gave it a
+ *        120s deadline with one retry (240s total).
  *
  *  Anonymous REST comments: WordPress supports anonymous commenting via the
  *        classic wp-comments-post.php but blocks it over REST by default. The
@@ -193,7 +220,7 @@ function ams_afa_hero_aliases() {
 /** Bumped on every release. Part of the embed cache key, so shipping a new
  *  version invalidates every cached frame rather than leaving stale HTML (and a
  *  stale AMS_PARENTS list) behind a deploy. */
-define( 'AMS_AFA_VERSION', '1.20.1' );
+define( 'AMS_AFA_VERSION', '1.20.4' );
 
 /** How long a rendered embed is reused server-side. The cost it avoids is a
  *  ~3.7s WordPress boot; the price is that a slider edited in wp-admin takes up
@@ -400,6 +427,21 @@ function ams_afa_sync_show_seasons( $episode_id, $remove_only = false ) {
         } ) );
     }
 
+    // MasVideos_TV_Show::set_seasons() runs `array_multisort(array_column(
+    // $seasons, 'position'), SORT_ASC, $seasons)` on EVERY read of the show
+    // (wp-admin's TV Shows list included) and fatals with "Array sizes are
+    // inconsistent" the moment any entry lacks a `position` key — array_column
+    // silently drops that entry instead of padding it, so the plucked column
+    // comes back shorter than $seasons. 1.20.3's own new-season branch below
+    // never set one. Backfill here, unconditionally, so a show already
+    // carrying that gap self-heals on its very next trash/create/update
+    // instead of needing a separate repair pass.
+    foreach ( $seasons as $i => $season ) {
+        if ( ! isset( $season['position'] ) ) {
+            $seasons[ $i ]['position'] = $i;
+        }
+    }
+
     if ( ! $remove_only ) {
         list( $season_no, ) = ams_afa_label_numbers( get_post_meta( $episode_id, '_episode_number', true ) );
         if ( $season_no < 1 ) {
@@ -423,6 +465,7 @@ function ams_afa_sync_show_seasons( $episode_id, $remove_only = false ) {
                 'episodes'    => array(),
                 'year'        => '',
                 'description' => '',
+                'position'    => count( $seasons ),
             );
             $target = count( $seasons ) - 1;
         }
@@ -451,10 +494,27 @@ function ams_afa_sync_show_seasons( $episode_id, $remove_only = false ) {
             return $order[ $a ] === $order[ $b ] ? $a - $b : $order[ $a ] - $order[ $b ];
         } );
         $seasons = array_values( $seasons );
+
+        // Keep `position` (see the backfill above) true to this reorder — MasVideos
+        // re-sorts by it on every read, so a stale value here would fight this
+        // function's own season-number ordering the next time the show loads.
+        foreach ( $seasons as $i => $season ) {
+            $seasons[ $i ]['position'] = $i;
+        }
     }
 
     if ( $seasons !== $before ) {
         update_post_meta( $show_id, '_seasons', $seasons );
+    }
+
+    // Removing an episode cannot add, remove or reorder seasons, so every
+    // remaining episode's season ARRAY INDEX is unchanged. The old path still
+    // walked the whole show and repaired historical index drift here; on a
+    // 100+ episode show that unrelated work could keep wp_trash_post running
+    // beyond the dashboard's 120s deadline. Full reconciliation still happens
+    // on create/update below, where seasons really can move.
+    if ( $remove_only ) {
+        return;
     }
 
     // 5. Every listed episode's `_tv_show_season_id` must equal its season's
@@ -462,6 +522,21 @@ function ams_afa_sync_show_seasons( $episode_id, $remove_only = false ) {
     //    everyone else's episodes too, and the episode page prints its season
     //    name through this index. Writes only on drift, so the common case is
     //    all no-ops.
+    //
+    // Prime the meta cache for every episode in ONE query first — otherwise
+    // each get_post_meta() below is a separate uncached lookup, and on a
+    // 100-episode show that's up to 100 sequential round trips just to find
+    // the (usually zero) episodes that actually need the update.
+    $all_episode_ids = array();
+    foreach ( $seasons as $season ) {
+        foreach ( $season['episodes'] as $eid ) {
+            $all_episode_ids[] = (int) $eid;
+        }
+    }
+    if ( $all_episode_ids ) {
+        update_meta_cache( 'post', $all_episode_ids );
+    }
+
     foreach ( $seasons as $i => $season ) {
         foreach ( $season['episodes'] as $eid ) {
             if ( (int) get_post_meta( $eid, '_tv_show_season_id', true ) !== $i ) {
@@ -500,6 +575,88 @@ add_action( 'untrashed_post', function ( $post_id ) {
         ams_afa_sync_show_seasons( $post_id );
     }
 }, 10, 1 );
+
+/**
+ * POST /wp-json/wp/v2/web/episode/sync  { episode_id }
+ *
+ * Re-run and VERIFY the episode → show `_seasons` reconciliation. The normal
+ * rest_after_insert_episode hook remains the first line of defence; this route
+ * gives the dashboard a separate, observable repair step when another live
+ * callback prevents that hook from completing. It is intentionally one
+ * episode at a time and capability-gated to the episode being repaired.
+ */
+add_action( 'rest_api_init', function () {
+    register_rest_route( 'wp/v2/web', 'episode/sync', array(
+        'methods'             => WP_REST_Server::CREATABLE,
+        'permission_callback' => function ( $request ) {
+            $episode_id = (int) $request->get_param( 'episode_id' );
+            return $episode_id > 0 && current_user_can( 'edit_post', $episode_id );
+        },
+        'callback'            => function ( $request ) {
+            $episode_id = (int) $request->get_param( 'episode_id' );
+            if ( 'episode' !== get_post_type( $episode_id ) ) {
+                return new WP_REST_Response( array(
+                    'status'  => 'ERROR',
+                    'message' => 'Episode not found.',
+                ), 200 );
+            }
+            if ( 'publish' !== get_post_status( $episode_id ) ) {
+                return new WP_REST_Response( array(
+                    'status'  => 'ERROR',
+                    'message' => 'Only published episodes can be added to seasons.',
+                ), 200 );
+            }
+
+            ams_afa_sync_show_seasons( $episode_id );
+
+            $show_id = (int) get_post_meta( $episode_id, '_tv_show_id', true );
+            $seasons = maybe_unserialize( get_post_meta( $show_id, '_seasons', true ) );
+            $found   = null;
+            if ( is_array( $seasons ) ) {
+                foreach ( $seasons as $index => $season ) {
+                    $episodes = isset( $season['episodes'] ) && is_array( $season['episodes'] )
+                        ? array_map( 'intval', $season['episodes'] )
+                        : array();
+                    if ( in_array( $episode_id, $episodes, true ) ) {
+                        $found = (int) $index;
+                        break;
+                    }
+                }
+            }
+
+            $stored_index = (int) get_post_meta( $episode_id, '_tv_show_season_id', true );
+            if ( null === $found || $stored_index !== $found ) {
+                error_log( sprintf(
+                    '[ams-afa] episode season sync failed: episode=%d show=%d found=%s stored_index=%d',
+                    $episode_id,
+                    $show_id,
+                    null === $found ? 'no' : (string) $found,
+                    $stored_index
+                ) );
+                return new WP_REST_Response( array(
+                    'status'  => 'ERROR',
+                    'message' => 'The episode was saved but could not be attached to its season.',
+                ), 200 );
+            }
+
+            return new WP_REST_Response( array(
+                'status' => 'OK',
+                'data'   => array(
+                    'episode_id'  => $episode_id,
+                    'show_id'     => $show_id,
+                    'season_index'=> $found,
+                ),
+            ), 200 );
+        },
+        'args'                => array(
+            'episode_id' => array(
+                'required'          => true,
+                'type'              => 'integer',
+                'sanitize_callback' => 'absint',
+            ),
+        ),
+    ) );
+} );
 
 /**
  * GET /wp-json/wp/v2/web/episode?id=<id>

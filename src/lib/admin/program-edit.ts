@@ -438,9 +438,35 @@ export async function createEpisode(w: EpisodeCreateWrite): Promise<{ id: number
         _episode_run_time: w.runTime,
       },
     },
-    timeoutMs: CREATE_TIMEOUT,
+    // The row is committed before the host's slow publish/cache hooks finish.
+    // The action recovers by deterministic slug and verifies every stored
+    // field when this short acknowledgement window expires.
+    timeoutMs: 15_000,
   });
   return { id: data.id };
+}
+
+interface EpisodeSeasonSyncEnvelope {
+  status: "OK" | "ERROR";
+  message?: string;
+  data?: { episode_id: number; show_id: number; season_index: number };
+}
+
+/** Explicitly reconcile and verify the episode inside its parent show's
+ * `_seasons` repeater. WordPress/MasVideos renders that array in wp-admin and
+ * on the legacy show page; `_tv_show_id` alone is not enough. Walks every
+ * episode in the show to keep `_tv_show_season_id` true (see
+ * ams_afa_sync_show_seasons), so on a 100+ episode show this rides the same
+ * slow-host budget as the other writes, not the 30s default. */
+export async function syncEpisodeToShow(id: number): Promise<void> {
+  const { data } = await adminFetch<EpisodeSeasonSyncEnvelope>(`/wp/v2/web/episode/sync`, {
+    method: "POST",
+    body: { episode_id: id },
+    timeoutMs: CREATE_TIMEOUT,
+  });
+  if (data.status !== "OK" || data.data?.episode_id !== id) {
+    throw new Error(data.message || "WordPress did not attach the episode to its season.");
+  }
 }
 
 /**
@@ -503,6 +529,28 @@ interface RawEditEpisode {
   };
 }
 
+function toEditableEpisode(raw: RawEditEpisode): EditableEpisode {
+  const meta = raw.meta;
+  const media = raw._embedded?.["wp:featuredmedia"]?.[0];
+  const { season, episode } = parseEpisodeLabel(metaStr(meta, "_episode_number"));
+  return {
+    id: raw.id,
+    showId: metaInt(meta, "_tv_show_id"),
+    season,
+    episode,
+    title: decodeEntities(raw.title?.raw ?? "").trim(),
+    videoUrl: metaStr(meta, "_episode_url_link"),
+    releaseDate: tsToIsoDate(metaInt(meta, "_episode_release_date")),
+    runTime: metaStr(meta, "_episode_run_time"),
+    thumbId: raw.featured_media ?? 0,
+    thumbUrl:
+      media?.media_details?.sizes?.medium?.source_url ??
+      media?.media_details?.sizes?.thumbnail?.source_url ??
+      media?.source_url ??
+      "",
+  };
+}
+
 /** An episode's editable state — what the edit dialog prefills from. The list
  *  endpoint (web/tv-show-episodes) can't serve this: it has no video URL, and
  *  its release date is already display-formatted. */
@@ -537,26 +585,24 @@ export async function getEpisodeForEdit(id: number): Promise<EditableEpisode | n
     throw e;
   }
   if (!raw) return null;
+  return toEditableEpisode(raw);
+}
 
-  const meta = raw.meta;
-  const media = raw._embedded?.["wp:featuredmedia"]?.[0];
-  const { season, episode } = parseEpisodeLabel(metaStr(meta, "_episode_number"));
-  return {
-    id: raw.id,
-    showId: metaInt(meta, "_tv_show_id"),
-    season,
-    episode,
-    title: decodeEntities(raw.title?.raw ?? "").trim(),
-    videoUrl: metaStr(meta, "_episode_url_link"),
-    releaseDate: tsToIsoDate(metaInt(meta, "_episode_release_date")),
-    runTime: metaStr(meta, "_episode_run_time"),
-    thumbId: raw.featured_media ?? 0,
-    thumbUrl:
-      media?.media_details?.sizes?.medium?.source_url ??
-      media?.media_details?.sizes?.thumbnail?.source_url ??
-      media?.source_url ??
-      "",
-  };
+/** Recover an episode create whose HTTP response timed out after WordPress
+ * committed the row. Episode slugs are deterministic at create time, so this
+ * is also an idempotency check: retrying a save that already landed returns
+ * the existing row instead of encouraging the editor to create a duplicate. */
+export async function getEpisodeForEditBySlug(slug: string): Promise<EditableEpisode | null> {
+  const { data } = await adminFetch<RawEditEpisode[]>(`/wp/v2/episode`, {
+    query: {
+      context: "edit",
+      slug,
+      per_page: 1,
+      _fields: "id,slug,title,featured_media,meta",
+    },
+  });
+  const raw = data.find((episode) => episode.slug === slug) ?? null;
+  return raw ? toEditableEpisode(raw) : null;
 }
 
 /** The same episode from the fast path. Season/episode are parsed from the
@@ -631,7 +677,10 @@ export async function updateEpisode(id: number, w: EpisodeWrite): Promise<{ id: 
         _episode_run_time: w.runTime,
       },
     },
-    timeoutMs: CREATE_TIMEOUT, // saving a PUBLISHED post runs the slow hooks
+    // Core stores the post and meta before this host's very slow publish/cache
+    // hooks run. Stop waiting for those hooks, then let the action verify the
+    // uncached stored record. This turns a 120s false error into a ~20s save.
+    timeoutMs: 15_000,
   });
   return { id: data.id };
 }

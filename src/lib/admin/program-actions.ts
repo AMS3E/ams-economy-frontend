@@ -13,8 +13,10 @@ import {
   createProgram,
   createShowForProgram,
   createEpisode,
+  syncEpisodeToShow,
   updateEpisode,
   readEpisodeForEdit,
+  getEpisodeForEditBySlug,
   trashProgramPost,
   isTrashed,
   readProgramForEdit,
@@ -24,6 +26,7 @@ import {
 } from "./program-edit";
 import { AdminAuthError, AdminApiError } from "./client";
 import { programByPostId } from "@/lib/programs";
+import { decodeEntities } from "@/lib/api/mappers";
 
 export interface ProgramPayload {
   title: string;
@@ -170,6 +173,7 @@ function normalizeEpisode(
 function episodeSaveLanded(
   stored: EditableEpisode | null,
   wanted: {
+    showId?: number;
     title: string;
     season: number;
     episode: number;
@@ -179,16 +183,77 @@ function episodeSaveLanded(
     thumbId: number;
   },
 ): boolean {
+  const text = (value: string) => decodeEntities(value).trim();
   return Boolean(
     stored &&
-      stored.title === wanted.title &&
+      (wanted.showId === undefined || stored.showId === wanted.showId) &&
+      text(stored.title) === text(wanted.title) &&
       stored.season === wanted.season &&
       stored.episode === wanted.episode &&
-      stored.videoUrl === wanted.videoUrl &&
+      text(stored.videoUrl) === text(wanted.videoUrl) &&
       stored.releaseDate === wanted.releaseDate &&
-      stored.runTime === wanted.runTime &&
+      text(stored.runTime) === text(wanted.runTime) &&
       stored.thumbId === wanted.thumbId,
   );
+}
+
+/** A timed-out POST can finish committing just after the abort reaches Node.
+ * Poll the uncached record briefly instead of sampling once and reporting a
+ * false failure because of that race. Returns the last record for diagnostics.
+ *
+ * `read()` (readEpisodeForEdit / getEpisodeForEditBySlug) tries the fast path
+ * (10s) then falls back to WP REST (30s) — a single call can itself take up
+ * to ~40s when the host is the thing running slow, which is exactly the
+ * condition this is recovering from. The deadline has to clear that worst
+ * case or "polling" collapses to one attempt and this just re-throws the
+ * original timeout, which is what was still surfacing as "Couldn't save the
+ * episode" even with the short write deadline in place. */
+async function confirmEpisodeSave(
+  read: () => Promise<EditableEpisode | null>,
+  wanted: Parameters<typeof episodeSaveLanded>[1],
+): Promise<{ landed: boolean; stored: EditableEpisode | null }> {
+  const deadline = Date.now() + 45_000;
+  let stored: EditableEpisode | null = null;
+  do {
+    stored = await read().catch(() => null);
+    if (episodeSaveLanded(stored, wanted)) return { landed: true, stored };
+    if (Date.now() >= deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, 750));
+  } while (Date.now() < deadline);
+  return { landed: false, stored };
+}
+
+function episodeMismatchFields(
+  stored: EditableEpisode | null,
+  wanted: Parameters<typeof episodeSaveLanded>[1],
+): string {
+  if (!stored) return "record unavailable";
+  const text = (value: string) => decodeEntities(value).trim();
+  const fields = [
+    wanted.showId !== undefined && stored.showId !== wanted.showId ? "show" : "",
+    text(stored.title) !== text(wanted.title) ? "title" : "",
+    stored.season !== wanted.season || stored.episode !== wanted.episode ? "number" : "",
+    text(stored.videoUrl) !== text(wanted.videoUrl) ? "video" : "",
+    stored.releaseDate !== wanted.releaseDate ? "release date" : "",
+    text(stored.runTime) !== text(wanted.runTime) ? "duration" : "",
+    stored.thumbId !== wanted.thumbId ? "thumbnail" : "",
+  ].filter(Boolean);
+  return fields.join(", ") || "unknown";
+}
+
+/** syncEpisodeToShow walks every episode in the show to keep season indexes
+ *  true, so on a big show it can outlive even its long deadline. It's a pure
+ *  reconcile-and-verify — safe to just run again — so a timeout gets one
+ *  retry before this gives up and lets the caller report it separately from
+ *  the episode content, which by this point is already saved. */
+async function syncEpisodeOrRetry(episodeId: number): Promise<void> {
+  try {
+    await syncEpisodeToShow(episodeId);
+  } catch (e) {
+    const timedOut = e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
+    if (!timedOut) throw e;
+    await syncEpisodeToShow(episodeId);
+  }
 }
 
 /** Shared catch for the program/episode actions: an expired session goes to
@@ -216,21 +281,76 @@ export async function createEpisodeAction(programId: number, payload: EpisodePay
     if (!program) return { ok: false, error: "Program not found." };
     if (program.showId <= 0) return { ok: false, error: "This program has no episode collection yet." };
 
-    const created = await createEpisode({
+    const slug = `${program.slug || `program-${program.id}`}-s${season}e${episode}`;
+    const write = {
       showId: program.showId,
       label: `S${season}:E${episode}`,
-      slug: `${program.slug || `program-${program.id}`}-s${season}e${episode}`,
+      slug,
       title,
       videoUrl,
       releaseTs,
       runTime: payload.runTime.trim(),
       thumbId: payload.thumbId,
-    });
+    };
+    const wanted = {
+      showId: program.showId,
+      title,
+      season,
+      episode,
+      videoUrl,
+      releaseDate: payload.releaseDate.trim(),
+      runTime: write.runTime,
+      thumbId: write.thumbId,
+    };
+
+    // A previous attempt may have committed and then timed out. Do this
+    // idempotency check before POST so pressing Publish again cannot mint a
+    // second row with WordPress's automatic "-2" slug suffix.
+    const existing = await getEpisodeForEditBySlug(slug);
+    if (existing) {
+      if (episodeSaveLanded(existing, wanted)) {
+        await syncEpisodeToShow(existing.id);
+        return { ok: true, id: existing.id };
+      }
+      return {
+        ok: false,
+        error: `S${season}:E${episode} already exists with different details. Edit that episode instead.`,
+      };
+    }
+
+    let created: { id: number };
+    try {
+      created = await createEpisode(write);
+    } catch (e) {
+      const confirmed = await confirmEpisodeSave(() => getEpisodeForEditBySlug(slug), wanted);
+      if (!confirmed.landed || !confirmed.stored) {
+        console.warn(`[createEpisode] recovery mismatch: ${episodeMismatchFields(confirmed.stored, wanted)}`);
+        throw e;
+      }
+      created = { id: confirmed.stored.id };
+      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      console.warn(`[createEpisode] ${created.id}: ${msg}, but every requested field is stored — treating as success.`);
+    }
     // The public episode surfaces are busted by the WP plugin's publish
     // webhook; mirror it locally so this deployment refreshes even if the
     // webhook is down: the show's episode lists + the episodes index.
     revalidateTag("episodes", "max");
     revalidateTag(`tv-show:${program.showId}`, "max");
+    try {
+      await syncEpisodeOrRetry(created.id);
+    } catch (e) {
+      // The episode itself is created (or this would have thrown above) —
+      // this is only the show's `_seasons` attachment failing to confirm.
+      // Say so distinctly instead of "couldn't create", which would send
+      // someone re-submitting a create that already landed.
+      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      console.warn(`[createEpisode] ${created.id} season sync failed after create: ${msg}`);
+      return {
+        ok: false,
+        id: created.id,
+        error: `Episode created, but WordPress didn't confirm it's attached to its season — check wp-admin's Season & Episodes list. (${msg})`,
+      };
+    }
     return { ok: true, id: created.id };
   } catch (e) {
     if (e instanceof AdminAuthError) redirect("/login");
@@ -295,11 +415,14 @@ export async function updateEpisodeAction(
       });
     } catch (e) {
       // The same host behavior already handled by trashOrConfirm below: WP
-      // commits the write, then slow publish/cache hooks outlive the 120s
-      // response deadline. Re-read the uncached edit record and trust stored
+      // commits the write, then slow publish/cache hooks outlive the short
+      // acknowledgement deadline. Re-read the uncached edit record and trust stored
       // state over a missing HTTP response. A mismatch remains a real error.
-      const stored = await readEpisodeForEdit(episodeId).catch(() => null);
-      if (!episodeSaveLanded(stored, wanted)) throw e;
+      const confirmed = await confirmEpisodeSave(() => readEpisodeForEdit(episodeId), wanted);
+      if (!confirmed.landed) {
+        console.warn(`[updateEpisode] ${episodeId} recovery mismatch: ${episodeMismatchFields(confirmed.stored, wanted)}`);
+        throw e;
+      }
       const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
       console.warn(`[updateEpisode] ${episodeId}: ${msg}, but every requested field is stored — treating as success.`);
     }
@@ -307,6 +430,21 @@ export async function updateEpisodeAction(
     // if the webhook is down.
     revalidateTag("episodes", "max");
     if (program.showId > 0) revalidateTag(`tv-show:${program.showId}`, "max");
+    try {
+      await syncEpisodeOrRetry(episodeId);
+    } catch (e) {
+      // Everything the user edited is already stored (or this would have
+      // thrown above) — this is only the show's `_seasons` attachment failing
+      // to confirm. Say so distinctly instead of "couldn't save", which would
+      // send someone re-editing a save that already landed.
+      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      console.warn(`[updateEpisode] ${episodeId} season sync failed after save: ${msg}`);
+      return {
+        ok: false,
+        id: episodeId,
+        error: `Episode saved, but WordPress didn't confirm it's attached to its season — check wp-admin's Season & Episodes list. (${msg})`,
+      };
+    }
     return { ok: true, id: episodeId };
   } catch (e) {
     return programFail("updateEpisode", e, "Couldn't save the episode");
@@ -317,14 +455,30 @@ export async function updateEpisodeAction(
  * Trash a post, then believe the SITE rather than the request. WordPress
  * routinely completes a delete and misses the deadline answering (the slow
  * publish-path hooks run on the way out too), which surfaced as
- * "TimeoutError… couldn't trash" on a program that was already gone. On any
- * failure, re-read the post: still there = a real failure, worth rethrowing.
+ * "TimeoutError… couldn't trash" on a program that was already gone. A single
+ * immediate read can race the still-finishing delete, so timeouts get a bounded
+ * polling window; other failures keep the original one-read check.
  */
+async function confirmTrashed(type: ProgramType | "episode", id: number, poll: boolean): Promise<boolean> {
+  const deadline = Date.now() + (poll ? 60_000 : 0);
+  do {
+    const gone = await isTrashed(type, id).catch(() => false);
+    if (gone) return true;
+    if (Date.now() >= deadline) return false;
+    // Each uncached WordPress read already costs ~4s. A short gap keeps this
+    // gentle on the host while covering the documented 166s delete completion
+    // after the original 120s acknowledgement deadline.
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+  } while (Date.now() < deadline);
+  return false;
+}
+
 async function trashOrConfirm(type: ProgramType | "episode", id: number, timeoutMs?: number): Promise<void> {
   try {
     await trashProgramPost(type, id, timeoutMs);
   } catch (e) {
-    const gone = await isTrashed(type, id).catch(() => false);
+    const timedOut = e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
+    const gone = await confirmTrashed(type, id, timedOut);
     if (!gone) throw e;
     console.warn(`[trash] ${type} ${id}: request failed but the post IS trashed — treating as success.`);
   }
