@@ -9,7 +9,7 @@
 import { redirect } from "next/navigation";
 import { revalidateTag } from "next/cache";
 import { adminFetch, AdminAuthError, AdminApiError } from "./client";
-import { updateSettings, updateProfile, type SettingsWrite, type ProfileWrite } from "./settings";
+import { updateSettings, updateProfile, readProfile, type SettingsWrite, type ProfileWrite } from "./settings";
 import { createUser, type NewUser } from "./users";
 import { updateMediaAlt, deleteMediaItem } from "./media";
 
@@ -129,6 +129,36 @@ export async function saveProfile(patch: ProfileWrite): Promise<ActionResult> {
     return { ok: true };
   } catch (e) {
     return fail(e, "Couldn't save your profile.");
+  }
+}
+
+/** Point the signed-in account at an uploaded image (0 clears it). Its own
+ *  action, outside saveProfile, because the picture applies the moment the
+ *  upload finishes rather than waiting for Save — see ProfileForm. */
+export async function setMyAvatar(attachmentId: number): Promise<ActionResult> {
+  try {
+    await updateProfile({ ams_avatar: { id: attachmentId } });
+    return { ok: true };
+  } catch (e) {
+    return fail(e, "Couldn't update the picture.");
+  }
+}
+
+/** The sidebar account chip's picture and role, fresh from WordPress. Its own
+ *  tiny action (not readProfile exposed wholesale) because the chip mounts on
+ *  EVERY admin page: it should carry two strings, and a failure must stay
+ *  silent — initials + the login-time role are the designed fallback, and a
+ *  decorative fetch must never bounce the app to /login.
+ *
+ *  The role rides along because the layout's copy comes from the session cookie
+ *  written once at login: a role added in wp-admin afterwards would otherwise
+ *  stay invisible until the next login. */
+export async function fetchMyChip(): Promise<{ url: string | null; roleLabel: string | null }> {
+  try {
+    const profile = await readProfile();
+    return { url: profile.avatar?.url ?? null, roleLabel: profile.roleLabel };
+  } catch {
+    return { url: null, roleLabel: null };
   }
 }
 

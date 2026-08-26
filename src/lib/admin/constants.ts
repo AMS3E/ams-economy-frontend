@@ -16,7 +16,7 @@ export const DEFAULT_STATUSES = "publish,future,draft,pending";
  *  Lives here rather than in lib/admin/menus.ts because the Menus screen is a
  *  Client Component: value-importing it from that module would pull adminFetch
  *  (and next/headers with it) into the browser bundle. */
-export const PROGRAM_ICON_MENU = "secondary-nav-v3-menu";
+export const PROGRAM_ICON_MENU = "ams-infotainment-third-menu";
 
 /** Windows the dashboard's range control offers, and the ceiling on what the
  *  fast path will aggregate. A 365-day roll-up of WordPress Popular Posts'

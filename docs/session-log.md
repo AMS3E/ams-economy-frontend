@@ -5,223 +5,70 @@ general one: Session 14 is the public menu, Session 15 the public fast read
 path, Session 20 the public site's article sliders. Entries are chronological,
 not split by area, because most of them touch both.
 
-## SESSION 46 (2026-08-26): sandboxed the Session 45 trash fix on a local mirror
+## SESSION 43 (2026-08-25): picture applies on upload; every role shows; wp-admin shows the picture too; profile page full-width
 
-User hit the exact Session 45 symptom again in the admin UI: trashing the
-`S5:E1 "test gu"` throwaway episode surfaced "Couldn't trash the episode —
-TimeoutError: The operation was aborted due to timeout" despite that session's
-60s poll widening and the AFA 1.20.3→1.20.5 fixes. Rather than re-probe
-production (host bans IPs on heavy REST volume, §3), pointed at the local
-"edusit" WP mirror to test there first.
+Owner's report, from the second machine right after pulling b52664f: (1) gave
+`AMS_TEST_AUTHOR` a second role in wp-admin (Author + Contributor) — the
+dashboard still says "Author"; (2) uploaded a picture on /admin/profile — gone
+after a refresh, and wp-admin shows nothing for that user either.
 
-That mirror turned out to be missing `ams-frontend-api` entirely — confirmed
-it's this repo's sandbox (domain `econome.kh`, matches `.env`'s
-`NEXT_PUBLIC_WP_ORIGIN`, plugin stock matches a `wp-migrate-db-pro` pull of
-economy's production plugins) rather than the `infotainment.ams.com.kh`
-property project-context.md §1 otherwise describes. Installed the current
-1.20.5 source there. Full detail — paths, why headless wp-cli needed
-`-d mysqli.default_port`, why the site has to be started from the Local GUI
-first — now in project-context.md §10 rather than duplicated here.
+### Roles — three copies of `roles[0]`
 
-**Not yet done:** activating the plugin in wp-admin (needs the Local site
-running, which it wasn't during this session) and actually retrying Trash on
-the sandbox to confirm the fix before touching production again.
+The label was computed in THREE places (`admin/layout.tsx` for the sidebar
+chip, `settings.ts` for the profile screen, `users.ts` for the Users list) and
+every one took `roles[0]`, so a second role was invisible everywhere. One
+shared helper now, `src/lib/admin/role-label.ts` → "Author, Contributor" (the
+Users CSV export already quotes fields, so the comma is safe). The chip had a
+second staleness on top: its role came from the `ams_user` session cookie
+written ONCE at login, so a role added in wp-admin afterwards would not show
+until the next login. The chip's post-paint fetch (`fetchMyChip`, previously
+`fetchMyAvatar`; query key `MY_CHIP_QUERY_KEY`) now returns the live role label
+alongside the picture and prefers it over the cookie's copy.
 
-**Then, same session:** asked to make create/edit/delete episode actually
-faster, not just more forgiving of the host's slowness. Every WordPress REST
-call here pays a fixed ~4s bootstrap no matter how small the query (§4), so
-the number of SEQUENTIAL calls per action is what dominates wall-clock — not
-the SQL inside any one of them. Found two calls that were pure overhead:
+### Picture — it was the Save step (owner-confirmed)
 
-1. **`trashEpisodeAction` still did a full `readProgramForEdit()` before
-   every trash**, just to get `showId` for the cache-tag invalidation — the
-   exact redundant-read pattern Session 45 already cut from create/update but
-   missed for trash. `EpisodesList.tsx` already holds `showId` as a prop (it
-   passes it into create/update), so trash now takes it as a parameter
-   instead — one whole WP call removed from every single trash, no plugin
-   change, deployable immediately.
-2. **Create/update episode always followed the actual write with a second,
-   separate `web/episode/sync` call** to verify the show's `_seasons`
-   attachment (the Session 45 safety net) — even though
-   `rest_after_insert_episode` already runs that exact reconcile INSIDE the
-   same create/update request, moments before the response is built. AFA
-   **1.20.6** (`docs/wordpress/ams-frontend-api.php`, zip rebuilt, **not yet
-   uploaded anywhere**) adds a `rest_prepare_episode` filter that reads back
-   the already-fresh state (two cheap `get_post_meta()` calls, no re-run of
-   the reconcile) and rides it on the create/update response as
-   `ams_season_sync: {status, season_index}`. `createEpisode`/`updateEpisode`
-   in [program-edit.ts](../src/lib/admin/program-edit.ts) now return
-   `seasonSynced`, and [program-actions.ts](../src/lib/admin/program-actions.ts)
-   skips the explicit `web/episode/sync` call whenever it's `true` — one whole
-   round trip saved per save, on the common path. Old-plugin/timeout/error
-   cases all fall through to the exact same explicit-sync path as before, so
-   this is a pure speed win layered on top of the existing safety net, not a
-   replacement for it — and the frontend change is safe to ship even before
-   1.20.6 is uploaded (missing `ams_season_sync` just means "fall back",
-   which is today's behavior).
+The picture was STAGED behind Save ("Applied when you save"): upload, refresh
+without Save, and it is gone by design. **The owner confirmed in real Chrome on
+production that pressing Save changes makes it persist** — so the write path
+(afa 1.20.0 `ams_avatar`) and the fast.php 1.8.2 read are both live and
+correct, and no plugin re-upload was needed for this.
 
-Copied 1.20.6 onto the local sandbox (§10) alongside 1.20.5; same
-not-yet-activated state. `tsc --noEmit`, targeted ESLint, and a full
-production build (229 static pages) all clean. **Still needed:** start the
-sandbox, activate the plugin, exercise create/edit/trash there — including
-confirming `ams_season_sync` actually appears on a real response — before
-uploading 1.20.6 to production.
+Before that confirmation it could not be reproduced from this machine: no
+`.env.local`, the standing `C:\chrome-debug` profile logged in to neither
+localhost:3000 nor info.amscloud.cc, and borrowing the httpOnly cookie over CDP
+was declined by the auto-mode classifier (rightly). Measured anyway: afa 1.20.0
+IS live (anonymous `wp/v2/users` rows carry `ams_avatar`); and this machine's
+local `ams-fast-api.zip` was the Aug 17 **1.8.1** build with zero `ams_avatar`
+lines — the zips are gitignored, so every machine must rebuild its own; a
+stale local zip is a trap, not evidence about the server.
 
-## SESSION 45 (2026-08-25): episode saves explicitly verify WordPress `_seasons`
+wp-admin showing nothing was expected: nothing hooked WordPress's own avatar
+pipeline, so wp-admin only ever showed Gravatar (Bonrith's wp-admin photo IS a
+Gravatar — `avatar_urls` → secure.gravatar.com; no local-avatar plugin on the
+site).
 
-Khmer Insider episode 173476 (`S5:E1`) proved that a committed episode row and
-the automatic `rest_after_insert_episode` hook are not the same guarantee: the
-dashboard listed the row by `_tv_show_id`, while wp-admin post 21395 still had
-only Seasons 1–4 in its `_seasons` repeater. Re-saving did not repair it.
+### What changed
 
-AMS Frontend API 1.20.2 adds authenticated `POST web/episode/sync`. It runs the
-existing reconciliation for one published episode and then verifies both that
-the episode is present in the show's `_seasons` array and that its stored
-`_tv_show_season_id` matches the resulting array index. Create and Edit now call
-this explicit step after the episode write (including timeout recovery and an
-idempotent create retry), so a save cannot report success while wp-admin still
-omits the season. Deploy the WordPress plugin before the frontend because the
-frontend now requires this route for episode Publish/Edit.
+- **The picture applies the moment the upload finishes** (`setMyAvatar`
+  action → `POST users/me { ams_avatar: { id } }`; Remove is immediate too).
+  Save no longer touches `ams_avatar` at all, so `avatarDirty` and the
+  "{ id: 0 } would clear it" hazard are gone with it. Helper text says so.
+- **afa 1.20.1** answers `pre_get_avatar_data` with the stored
+  `ams_avatar_url`, so wp-admin's Users list / profile screen / comment lists
+  show the dashboard picture (accounts without one fall through to Gravatar
+  unchanged; REST `avatar_urls` now carries the same URL at every size — the
+  public site renders no avatars, so nothing public changes). **Optional
+  upload** — it only changes what wp-admin shows. Both zips were rebuilt
+  2026-08-25 from the current sources (afa 1.20.1; fast-api 1.8.2, inspected);
+  only the afa one carries a change.
+- **Profile page is full-width**: the 760px `maxWidth` wrapper in ProfileForm
+  is gone at the owner's request — on a wide window the cards stopped short of
+  the canvas and read as cut off. (SettingsForm still carries its own cap;
+  untouched.)
 
-The same live round exposed a second one-shot race: episode Trash hit the 120s
-deadline, then `trashOrConfirm()` sampled WordPress once before the delete had
-finished and surfaced `TimeoutError`. Timeout recovery now polls the uncached
-post status for up to 60 additional seconds (the measured delete completion is
-166s); non-timeout failures retain the original single verification read. A
-confirmed trash reports success, while a row that remains after the bounded
-window still reports the real failure.
-
-The live logs then separated false failure from real failure: both DELETEs for
-episode 173476 hit 120s, the verification read still returned `publish`, and a
-later anonymous detail read confirmed the episode remained live. AFA 1.20.3
-removes the unnecessary full-show reindex from the trash/delete hook. Removing
-one episode changes no season array indexes, so the hook now updates `_seasons`
-and returns; full reindexing remains on create/update, where adding or moving a
-season can actually shift indexes. Rebuild/upload 1.20.3 before retrying Trash.
-
-Retrying Trash on a throwaway `S5:E1 "test"` episode (the first episode ever to
-land in a season Khmer Insider didn't have yet) took down wp-admin's whole TV
-Shows list instead: `Uncaught Error: Array sizes are inconsistent` in
-MasVideos's `abstract-masvideos-tv-show.php:677`, inside
-`MasVideos_TV_Show::set_seasons()`. That method runs on every read of a show
-(so every row of that list, not just Khmer Insider) and does
-`array_multisort(array_column($seasons, 'position'), SORT_ASC, $seasons)` —
-`ams_afa_sync_show_seasons`'s new-season branch never set a `position` key, and
-`array_column()` silently drops entries missing the key instead of padding
-them, so the plucked column came back shorter than `$seasons` the moment a
-show got its first sync-created season. AFA **1.20.4** backfills `position` on
-every season entry unconditionally (self-healing already-corrupted shows on
-their next trash/create/update, no separate repair pass needed) and keeps it
-aligned with the season-number order on create/update. Rebuild/upload 1.20.4
-— this supersedes 1.20.3, no need to ship that version separately — before
-retrying Trash on Khmer Insider or touching its TV Shows list.
-
-Saving an edit on Khmer Insider (100 episodes) next surfaced "Couldn't save
-the episode — TimeoutError", even though the title/video/etc. write itself was
-already landing fine. Cause: `syncEpisodeToShow()` — the new 1.20.2 verify
-step added earlier this session — walks every episode in the show to keep
-`_tv_show_season_id` true, same cost class as the old full trash reindex, but
-its `adminFetch` call was left on the 30s default while the episode write next
-to it already carries the long slow-host deadline. On a big show the sync step
-alone can outlive 30s while the actual field save already succeeded, and the
-timeout was surfacing as a blanket "couldn't save" — exactly the misleading
-failure this session had already fixed for the write itself, just one step
-later. Fixed in the frontend only (no plugin change needed this time):
-`syncEpisodeToShow` now carries the same long timeout as the write
-([program-edit.ts](../src/lib/admin/program-edit.ts)), and Create/Edit retry
-it once on timeout before giving up (idempotent — reconciling twice is a
-no-op) ([program-actions.ts](../src/lib/admin/program-actions.ts)). If it
-still fails after the retry, the action now reports it as its own distinct
-error — "Episode saved, but WordPress didn't confirm it's attached to its
-season" — instead of the generic "couldn't save", since by that point the
-episode's actual content is already stored and re-editing it would accomplish
-nothing.
-
-The same "Couldn't save the episode — TimeoutError" still recurred after that
-fix, on the write's own recovery path this time, not the season sync.
-`confirmEpisodeSave()` polls the uncached episode for up to 12s before giving
-up and re-throwing the original timeout — but each `read()` it calls
-(`readEpisodeForEdit`) tries the fast path (10s) then falls back to WP REST
-(30s), so one call can itself take ~40s when the host is the thing running
-slow, which is exactly the condition being recovered from. That collapsed the
-"poll for 12s" into one attempt that didn't finish in time, and the original
-`TimeoutError` re-surfaced as a false failure again, one layer in from where
-this session already fixed it once. Widened the deadline in
-[program-actions.ts](../src/lib/admin/program-actions.ts) to 45s so it clears
-the read's own worst case.
-
-Both fixes deployed (AFA 1.20.5 uploaded; frontend commit `2f252ba` pushed to
-`main`, Dokploy autodeploy). Next question was general slowness of episode
-edit/save, not another false failure. `adminFetch`'s own dev-timing comment
-already names the cost model: ~4s fixed bootstrap per WordPress REST call
-(OPcache off, 62 plugins re-parsed every time), paid once per call an action
-makes. `createEpisodeAction`/`updateEpisodeAction` each opened with
-`readProgramForEdit(programId)` just to read back `showId` (and `slug`, for
-create) — data the calling page had already fetched one request earlier
-([episodes/page.tsx](../src/app/admin/programs/[id]/episodes/page.tsx) reads
-the full program to build the episode list). That was a fully redundant ~4s+
-WordPress call on every single save. Threaded `showId`/`programSlug` down
-through `EpisodesList` → `EpisodeDialog` as props instead, and both actions
-now take them as parameters — cuts one WP call off every create (4→3) and
-update (3→2). The dropped "Program not found" check is not a regression in
-practice: WordPress's own write is still the real authority, and this is a
-single-admin internal tool, not a multi-tenant boundary.
-
-Creating `S5:E2` on Khmer Insider next hit "Episode created, but WordPress
-didn't confirm it's attached to its season" — the sync step itself, retried
-once at 120s (240s total), still failed. Reading `ams_afa_sync_show_seasons`'s
-step 5 (the `_tv_show_season_id` drift check) found the likely cause: it calls
-`get_post_meta()`/`update_post_meta()` once per episode **in the whole show**,
-uncached — on a 100-episode show that's up to 100 sequential meta round trips
-every single sync call, not just for the one episode being repaired. On this
-host that plausibly outlives even 240s. AFA **1.20.5** primes the post-meta
-cache for every episode in scope with one `update_meta_cache('post', …)` call
-before that loop, turning ~100 queries into ~1; behavior is unchanged, this is
-a pure batching optimization
-([ams-frontend-api.php](wordpress/ams-frontend-api.php)). Zip rebuilt at
-`docs/wordpress/ams-frontend-api.zip` via `build-frontend-api-zip.ps1` — not
-yet uploaded. **Before uploading**, the build script's own warning applies:
-confirm the live plugin file wasn't hand-edited on the server since 1.20.4
-(it has been before, for the `/hero-embed` frame-ancestors allow-list).
-
-## SESSION 44 (2026-08-25): episode Publish/Edit no longer report committed saves as errors
-
-The local Next server log proved the failure shape: episode POSTs repeatedly
-hit the 120-second client deadline, then the uncached fast read returned the
-committed row about 0.2 seconds later. Update already had a one-shot read-back,
-but a race or WordPress entity normalization could still fail its byte-for-byte
-comparison; create had no recovery at all, so a successful Publish appeared to
-fail and invited a duplicate retry.
-
-- Episode create/update now use a 15-second acknowledgement deadline. When the
-  host's post-save hooks outlive it, the action polls the uncached stored row
-  for up to 12 seconds and reports success only if every requested field is
-  present. Real rejections and partial writes remain errors.
-- Read-back text comparison normalizes WordPress HTML entities and surrounding
-  whitespace. Field names (never content) are logged when recovery mismatches.
-- Create recovers the new id through its deterministic slug. It also checks
-  that slug before POST: an identical prior timed-out create becomes an
-  idempotent success, while a same-number episode with different details is
-  refused and directed to Edit instead of creating WordPress's `-2` duplicate.
-- The REST episode mapper is shared by id and slug reads so recovery checks the
-  same title, parent show, label, video, date, duration, and thumbnail contract
-  as Edit.
-
-Verification: targeted ESLint clean; full Next 16.2.9 production build clean
-(229 static pages). No additional production episode was created or edited for
-testing.
-
-## SESSION 43 (2026-08-25): Economy hostname prepared for info → eco cutover
-
-The frontend build default now uses `https://eco.amscloud.cc`. AMS Frontend API
-1.20.1 adds that origin to iframe `frame-ancestors`/postMessage parents while
-retaining `https://info.amscloud.cc` during migration. The relocated AMS3E API
-source allows both origins for browser CORS as well. At the time of this
-change, `eco.amscloud.cc` resolved to the nginx host but returned 404, while
-`info.amscloud.cc` returned the Next.js site: Dokploy must add the `eco` domain
-to this application on container port 3000 and issue its certificate before
-traffic can cut over. Rebuild/upload the plugin and clear AMS Cache so cached
-embed HTML also carries the new parent origin.
+Verified here: `tsc --noEmit` clean, eslint clean, `php -l` on the plugin,
+`npm run build` clean; the Save round-trip owner-verified on production.
+Committed + pushed at the owner's request.
 
 ## SESSION 42 (2026-08-24): profile pictures — see / upload / change on /admin/profile
 

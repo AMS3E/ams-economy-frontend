@@ -1,11 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { css } from "@/styled-system/css";
 import { ac } from "./tokens";
-import { PageHeader, FormCard, FormGrid, Field, Input, Textarea, Badge, SaveBar, type SaveMessage } from "./ui";
-import type { Profile } from "@/lib/admin/settings";
-import { saveProfile } from "@/lib/admin/screen-actions";
+import { MY_CHIP_QUERY_KEY, type ChipData } from "./AccountMenu";
+import { PageHeader, FormCard, FormGrid, Field, Input, Textarea, Badge, Button, SaveBar, type SaveMessage } from "./ui";
+import type { Profile, ProfileAvatar } from "@/lib/admin/settings";
+import { saveProfile, setMyAvatar } from "@/lib/admin/screen-actions";
+import { uploadImageFile } from "./upload-client";
 
 export default function ProfileForm({ profile }: { profile: Profile }) {
   const [name, setName] = useState(profile.name);
@@ -18,6 +21,55 @@ export default function ProfileForm({ profile }: { profile: Profile }) {
   const [confirmPass, setConfirmPass] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<SaveMessage | null>(null);
+
+  // The picture is APPLIED the moment its upload finishes (Remove is immediate
+  // too) — it is NOT staged behind Save like the text fields. It was, and the
+  // owner's first real test read as "uploaded, then gone after a refresh": an
+  // uploaded picture that silently needs a second click is indistinguishable
+  // from a broken one. The upload lands in the media library either way; the
+  // one extra write here (ams_avatar, see ProfileWrite) is what makes the
+  // account point at it, and it also keeps the sidebar chip in step without a
+  // pending state to explain.
+  const [avatar, setAvatar] = useState<ProfileAvatar | null>(profile.avatar);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
+
+  /** Point the account at `next` (null clears). Reports through the form's
+   *  message strip; the preview only changes once WordPress has agreed. */
+  const applyAvatar = async (next: ProfileAvatar | null) => {
+    const res = await setMyAvatar(next?.id ?? 0);
+    if (!res.ok) {
+      setMsg({ kind: "err", text: res.error ?? "Couldn't update the picture." });
+      return;
+    }
+    setAvatar(next);
+    // Tell the sidebar chip right away. The staged URL is the upload's
+    // thumbnail — the plugin stores its own resolved rendition, so the next
+    // hard load may swap in an equivalent URL; visually identical.
+    queryClient.setQueryData<ChipData>(MY_CHIP_QUERY_KEY, (prev) => ({ roleLabel: prev?.roleLabel ?? null, url: next?.url ?? null }));
+    setMsg({ kind: "ok", text: next ? "Picture updated" : "Picture removed" });
+  };
+
+  const pickAvatar = async (file: File) => {
+    setAvatarBusy(true);
+    setMsg(null);
+    const res = await uploadImageFile(file); // never throws
+    if (!res.ok || !res.id) {
+      setAvatarBusy(false);
+      setMsg({ kind: "err", text: res.error ?? "Couldn't upload the picture." });
+      return;
+    }
+    await applyAvatar({ id: res.id, url: res.thumb || res.url || "" });
+    setAvatarBusy(false);
+  };
+
+  const removeAvatar = async () => {
+    setAvatarBusy(true);
+    setMsg(null);
+    await applyAvatar(null);
+    setAvatarBusy(false);
+  };
 
   const save = async () => {
     if (newPass && newPass !== confirmPass) {
@@ -46,22 +98,63 @@ export default function ProfileForm({ profile }: { profile: Profile }) {
   };
 
   return (
-    <div className={css({ maxWidth: "760px" })}>
+    <div>
       <PageHeader trail={[{ label: "Account" }, { label: "Profile" }]} title="Profile" sub="How you appear across the site." />
 
       <div className={css({ display: "flex", flexDirection: "column", gap: "16px", marginTop: "20px" })}>
         <FormCard title="Account" sub="Your byline and the details on your author page.">
           <div className={css({ display: "flex", flexDirection: "column", gap: "16px" })}>
             <div className={css({ display: "flex", alignItems: "center", gap: "16px" })}>
-              <div
-                className={css({ width: "56px", height: "56px", borderRadius: "16px", display: "grid", placeItems: "center", fontSize: "18px", fontWeight: 600, flex: "none" })}
-                style={{ background: ac.surfaceSunken, border: `1px solid ${ac.border}`, color: ac.muted }}
-              >
-                {profile.initials}
+              {avatar?.url ? (
+                // WP media URLs aren't in next/image's remotePatterns; a 56px
+                // avatar gains nothing from the optimizer anyway.
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={avatar.url}
+                  alt=""
+                  className={css({ width: "56px", height: "56px", borderRadius: "16px", objectFit: "cover", flex: "none" })}
+                  style={{ border: `1px solid ${ac.border}`, background: ac.surfaceSunken }}
+                />
+              ) : (
+                <div
+                  className={css({ width: "56px", height: "56px", borderRadius: "16px", display: "grid", placeItems: "center", fontSize: "18px", fontWeight: 600, flex: "none" })}
+                  style={{ background: ac.surfaceSunken, border: `1px solid ${ac.border}`, color: ac.muted }}
+                >
+                  {profile.initials}
+                </div>
+              )}
+              <div className={css({ display: "flex", flexDirection: "column", gap: "8px", minWidth: 0 })}>
+                <div className={css({ display: "flex", gap: "8px", flexWrap: "wrap" })}>
+                  <Button size="sm" disabled={avatarBusy || busy} onClick={() => fileRef.current?.click()}>
+                    {avatarBusy ? "Updating…" : avatar ? "Change picture" : "Upload picture"}
+                  </Button>
+                  {avatar ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={avatarBusy || busy}
+                      onClick={() => void removeAvatar()}
+                    >
+                      Remove
+                    </Button>
+                  ) : null}
+                </div>
+                <div className={css({ fontSize: "12.5px" })} style={{ color: ac.muted }}>
+                  Square images look best — it&#39;s shown small. Applied as soon as the upload finishes.
+                </div>
               </div>
-              <div className={css({ fontSize: "12.5px" })} style={{ color: ac.muted }}>
-                Avatar is managed in WordPress for now.
-              </div>
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                className={css({ display: "none" })}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  // Reset so picking the same file again still fires onChange.
+                  e.target.value = "";
+                  if (f) void pickAvatar(f);
+                }}
+              />
             </div>
 
             <Field label="Display name" hint="The byline readers see.">

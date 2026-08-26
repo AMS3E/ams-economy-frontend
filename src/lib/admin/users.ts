@@ -4,6 +4,7 @@
 import { adminFetch } from "./client";
 import { fastFetch, withRestFallback } from "./fast";
 import { decodeEntities } from "@/lib/api/mappers";
+import { roleLabel } from "./role-label";
 
 interface RawUser {
   id: number;
@@ -27,12 +28,6 @@ export interface UserListResult {
   total: number;
   totalPages: number;
   page: number;
-}
-
-/** "seo_manager" → "Seo Manager". */
-export function roleLabel(roles: string[]): string {
-  const slug = roles[0] ?? "";
-  return slug ? slug.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "—";
 }
 
 function map(u: RawUser): AdminUser {

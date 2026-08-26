@@ -4,6 +4,7 @@
 import { adminFetch } from "./client";
 import { fastFetch, withRestFallback } from "./fast";
 import { decodeEntities } from "@/lib/api/mappers";
+import { roleLabel } from "./role-label";
 
 export interface SiteSettings {
   title: string;
@@ -71,6 +72,13 @@ export async function updateSettings(patch: SettingsWrite): Promise<void> {
 
 // --- own profile ---
 
+export interface ProfileAvatar {
+  /** wp attachment id — what a write sends back. */
+  id: number;
+  /** Rendition URL, resolved and stored by the plugin at write time. */
+  url: string;
+}
+
 export interface Profile {
   id: number;
   name: string;
@@ -82,6 +90,8 @@ export interface Profile {
   username: string;
   roleLabel: string;
   initials: string;
+  /** null until the user uploads one — the UI then falls back to initials. */
+  avatar: ProfileAvatar | null;
 }
 
 interface RawMe {
@@ -94,6 +104,9 @@ interface RawMe {
   url?: string;
   slug?: string;
   roles?: string[];
+  /** ams-frontend-api ≥1.20.0 (REST field) / fast.php profile — same shape on
+   *  both paths on purpose. Absent entirely on an older plugin. */
+  ams_avatar?: { id?: number; url?: string } | null;
 }
 
 function initialsOf(name: string): string {
@@ -115,8 +128,9 @@ function mapProfile(data: RawMe): Profile {
     description: data.description ?? "",
     url: data.url ?? "",
     username: data.slug ?? "",
-    roleLabel: (roles[0] ?? "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) || "—",
+    roleLabel: roleLabel(roles),
     initials: initialsOf(name),
+    avatar: data.ams_avatar?.id && data.ams_avatar.url ? { id: data.ams_avatar.id, url: data.ams_avatar.url } : null,
   };
 }
 
@@ -148,6 +162,10 @@ export interface ProfileWrite {
   description?: string;
   url?: string;
   password?: string;
+  /** { id: <attachment> } sets the profile picture, { id: 0 } removes it.
+   *  Written on its own by setMyAvatar the moment an upload finishes — never
+   *  part of the Save patch, so an unchanged picture can't be cleared by it. */
+  ams_avatar?: { id: number };
 }
 
 export async function updateProfile(patch: ProfileWrite): Promise<void> {

@@ -28,7 +28,7 @@ interface RawEditPost {
   tags: number[];
   featured_media: number;
   /** Theme file that renders the post's TAIL on the WordPress site, e.g.
-   *  "templates/economic-template.php". "" is WordPress's "Default template",
+   *  "templates/celebrity-template.php". "" is WordPress's "Default template",
    *  which on this theme means nothing renders after the body. */
   template?: string;
   password?: string;
@@ -153,10 +153,16 @@ function metaStr(meta: Record<string, unknown> | undefined, key: string): string
   return typeof v === "string" ? v : "";
 }
 
-const EDIT_POST_FIELDS =
-  "id,date,slug,status,link,title,content,excerpt,categories,tags,featured_media,template,password,sticky,meta,_links,_embedded";
+export async function getPostForEdit(id: number): Promise<EditablePost | null> {
+  const { data } = await adminFetch<RawEditPost>(`/wp/v2/posts/${id}`, {
+    query: {
+      context: "edit",
+      _fields: "id,date,slug,status,link,title,content,excerpt,categories,tags,featured_media,template,password,sticky,meta,_links,_embedded",
+      _embed: "wp:featuredmedia,wp:term",
+    },
+  });
+  if (!data?.id) return null;
 
-function toEditablePost(data: RawEditPost): EditablePost {
   const media = data._embedded?.["wp:featuredmedia"]?.[0];
   const terms = (data._embedded?.["wp:term"] ?? []).flat();
 
@@ -185,39 +191,6 @@ function toEditablePost(data: RawEditPost): EditablePost {
       focus: metaStr(data.meta, "_yoast_wpseo_focuskw"),
     },
   };
-}
-
-export async function getPostForEdit(id: number): Promise<EditablePost | null> {
-  const { data } = await adminFetch<RawEditPost>(`/wp/v2/posts/${id}`, {
-    query: {
-      context: "edit",
-      _fields: EDIT_POST_FIELDS,
-      _embed: "wp:featuredmedia,wp:term",
-    },
-  });
-  if (!data?.id) return null;
-  return toEditablePost(data);
-}
-
-/** Recover a post create whose HTTP response timed out after WordPress
- *  committed the row, by the exact slug the create requested — mirrors
- *  getEpisodeForEditBySlug. Only useful when the caller sent an explicit
- *  slug (a draft with no slug yet has nothing deterministic to look up by,
- *  and WordPress may have appended its own "-2" suffix to a genuine
- *  duplicate, which is exactly the collision this is meant to catch rather
- *  than paper over). */
-export async function getPostForEditBySlug(slug: string): Promise<EditablePost | null> {
-  const { data } = await adminFetch<RawEditPost[]>(`/wp/v2/posts`, {
-    query: {
-      context: "edit",
-      slug,
-      per_page: 1,
-      _fields: EDIT_POST_FIELDS,
-      _embed: "wp:featuredmedia,wp:term",
-    },
-  });
-  const raw = data.find((post) => post.slug === slug) ?? null;
-  return raw ? toEditablePost(raw) : null;
 }
 
 /** What a write echoes back. `link` is the permalink WordPress computed for the
@@ -251,11 +224,6 @@ export async function updatePost(id: number, patch: PostWrite): Promise<SavedPos
   const { data } = await adminFetch<SavedPost>(`/wp/v2/posts/${id}`, {
     method: "POST",
     body: patch,
-    // Core stores the post and meta before this host's very slow publish/cache
-    // hooks run (same behavior as the episode writes). Stop waiting for those
-    // hooks and let the caller verify the uncached stored record instead —
-    // turns a 30s false error into a fast recovered save.
-    timeoutMs: 15_000,
   });
   return data;
 }
@@ -265,40 +233,52 @@ export async function createPost(fields: PostWrite): Promise<SavedPost> {
   const { data } = await adminFetch<SavedPost>(`/wp/v2/posts`, {
     method: "POST",
     body: { status: "draft", ...fields },
-    timeoutMs: 15_000,
   });
   return data;
 }
 
 /** One post template the active theme registers. */
 export interface PostTemplate {
-  /** Theme-relative file, and the value `template` takes. */
+  /** Theme-relative file, and the value `template` takes — "templates/celebrity-template.php". */
   file: string;
-  /** The concise label displayed in the article editor. */
+  /** What the theme's `Template Name:` header calls it — "Celebrity-Article Block". */
   name: string;
 }
 
-/**
- * Economy's live theme vocabulary, confirmed from the stored `template` field
- * of 200 recent posts on 2026-08-25. The current AMS Frontend API (1.9.4) does
- * not expose `/wp/v2/web/post-templates`, so keeping this list local avoids a
- * guaranteed slow 404 every time an editor opens.
- */
-const ECONOMY_POST_TEMPLATES: readonly PostTemplate[] = [
-  { file: "templates/economic-template.php", name: "Economic" },
-  { file: "templates/start-up-innovation-template.php", name: "Start-up & Innovation" },
-  { file: "templates/finance-template.php", name: "Finance" },
-  { file: "templates/pr-template.php", name: "Commercial Article" },
-  { file: "templates/real-estate-template.php", name: "Real Estate" },
-  { file: "templates/business-template.php", name: "Business" },
-  { file: "templates/general-knowledge-template.php", name: "General Knowledge" },
-] as const;
+/** Cached template list + when it was taken. */
+let templateCache: { at: number; list: PostTemplate[] } | null = null;
+
+/** The theme changes far less often than an editor is opened, and every REST
+ *  call here costs the site's fixed ~4s bootstrap. Ten minutes keeps a
+ *  newly-added template appearing "soon" without paying for it per page load. */
+const TEMPLATE_TTL_MS = 10 * 60 * 1000;
 
 /**
- * The post templates the live Economy theme offers, for the editor's Template
- * control. Async keeps the page-loading contract compatible with a future
- * switch to the plugin endpoint.
+ * The post templates the live theme offers, for the editor's Template control.
+ *
+ * Served by ams-frontend-api ≥1.19.0 (`wp/v2/web/post-templates`) because core
+ * REST publishes a post's template VALUE but never the list of legal ones — see
+ * that endpoint's comment.
+ *
+ * Never throws: the Template control is an enhancement, and an article must
+ * stay editable when the plugin is a version behind or the call fails. Callers
+ * get [] and render the control with just "Default template" plus whatever the
+ * post already carries.
  */
 export async function listPostTemplates(): Promise<PostTemplate[]> {
-  return [...ECONOMY_POST_TEMPLATES];
+  if (templateCache && Date.now() - templateCache.at < TEMPLATE_TTL_MS) {
+    return templateCache.list;
+  }
+  try {
+    const { data } = await adminFetch<{ data?: PostTemplate[] }>("/wp/v2/web/post-templates");
+    const list = (data?.data ?? []).filter(
+      (t): t is PostTemplate => typeof t?.file === "string" && typeof t?.name === "string" && t.file.length > 0,
+    );
+    // Don't cache an empty list from a plugin that isn't deployed yet — that
+    // would pin the editor to a bare dropdown for ten minutes after the upload.
+    if (list.length > 0) templateCache = { at: Date.now(), list };
+    return list;
+  } catch {
+    return [];
+  }
 }

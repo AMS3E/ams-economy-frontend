@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AMS Frontend API
  * Description: General-purpose endpoints for the AMS Infotainment Next.js frontend (add new ones here as needed). Read-only + a standalone hero-slider embed + the homepage featured-program picker + anonymous REST commenting + per-user login tokens for authenticated writes + program custom-meta exposed to REST + skips AMS Cache's synchronous page warmer on dashboard writes (96s -> under 1s). Self-contained — deactivate/delete anytime with zero effect on anything else.
- * Version:     1.20.6
+ * Version:     1.20.1
  * Author:      Soth Kimleng
  *
  * Standalone "add endpoints as needed" API file, separate from the legacy
@@ -107,6 +107,8 @@
  *        picture is an attachment referenced from user meta (`ams_avatar_id`
  *        + `ams_avatar_url`, resolved at write time). See
  *        ams_afa_user_avatar_write for why the URL is stored, not derived.
+ *        1.20.1 also answers `pre_get_avatar_data` with that picture, so
+ *        wp-admin (Users list, profile screen, comments) shows it too.
  *
  *  Episode → `_seasons` sync (1.18.0): REST episode writes (the dashboard's
  *        episode dialog) now slot the episode into its show's `_seasons`
@@ -114,48 +116,6 @@
  *        from — sorted by season and episode number, with the episode's
  *        `_tv_show_season_id` index kept true. Trash/delete/untrash maintain
  *        it too. See ams_afa_sync_show_seasons.
- *        1.20.2 adds an authenticated `web/episode/sync` repair endpoint so
- *        the dashboard verifies this second write explicitly instead of
- *        trusting that the insert hook ran.
- *        1.20.3 makes trash/delete reconciliation remove-only: deleting an
- *        episode cannot shift season indexes, so it no longer scans and
- *        rewrites every remaining episode before WordPress can finish trashing.
- *        1.20.4 fixes a fatal this exposed: a brand-new season entry (created
- *        the first time an episode's label names a season number the show
- *        doesn't have yet) never carried a `position` key. MasVideos's own
- *        MasVideos_TV_Show::set_seasons() runs on every read of the show —
- *        wp-admin's TV Shows list included — and does
- *        array_multisort(array_column($seasons, 'position'), SORT_ASC, $seasons);
- *        array_column() silently drops entries missing that key rather than
- *        padding them, so one seasonless entry makes the plucked column
- *        shorter than $seasons and array_multisort() fatals with "Array sizes
- *        are inconsistent" — for every row in the list, not just the show that
- *        triggered it. ams_afa_sync_show_seasons now backfills `position` on
- *        every entry unconditionally (self-healing already-corrupted shows on
- *        their next trash/create/update) and keeps it aligned with the
- *        season-number order it computes on create/update.
- *        1.20.5 primes the post-meta cache for every episode in the show
- *        before the `_tv_show_season_id` drift check, instead of one
- *        get_post_meta()/update_post_meta() round trip per episode. On a
- *        100-episode show that step alone was up to 100 uncached meta
- *        lookups per sync call — plausibly why `web/episode/sync` was still
- *        timing out for Khmer Insider even after the frontend gave it a
- *        120s deadline with one retry (240s total).
- *        1.20.6 stops making the dashboard pay for verification with a whole
- *        second HTTP round trip. `rest_after_insert_episode` already runs the
- *        reconcile inside the SAME create/update request, before the response
- *        is built — a `rest_prepare_episode` filter now reads back that
- *        already-fresh state (two cheap get_post_meta() calls, no re-run of
- *        the reconcile itself) and attaches it as `ams_season_sync` on the
- *        create/update response body. The dashboard can trust that field and
- *        skip its separate `web/episode/sync` call entirely on the common
- *        path — one whole ~4s-minimum WordPress REST round trip saved per
- *        save, more under host slowness. Falls back to the old explicit call
- *        when the field is absent (older plugin) or reports drift, so this is
- *        a pure speed win, not a safety trade — the verification is the exact
- *        same check `web/episode/sync` already did, just read for free off a
- *        request the dashboard was making anyway. See
- *        ams_afa_episode_season_status, shared by both paths.
  *
  *  Anonymous REST comments: WordPress supports anonymous commenting via the
  *        classic wp-comments-post.php but blocks it over REST by default. The
@@ -235,7 +195,7 @@ function ams_afa_hero_aliases() {
 /** Bumped on every release. Part of the embed cache key, so shipping a new
  *  version invalidates every cached frame rather than leaving stale HTML (and a
  *  stale AMS_PARENTS list) behind a deploy. */
-define( 'AMS_AFA_VERSION', '1.20.6' );
+define( 'AMS_AFA_VERSION', '1.20.1' );
 
 /** How long a rendered embed is reused server-side. The cost it avoids is a
  *  ~3.7s WordPress boot; the price is that a slider edited in wp-admin takes up
@@ -265,9 +225,6 @@ function ams_afa_embed_origins() {
         // "infotainment.ams.com.kh refused to connect" — diagnosed and parked
         // in Session 31 §5, fixed here in 1.11.0 because the popup fix below
         // is unobservable in production while the frame itself is blocked.
-        // New Economy hostname. Keep `info` during DNS/Dokploy cutover so the
-        // currently live deployment does not lose its embedded sliders.
-        'https://eco.amscloud.cc',
         'https://info.amscloud.cc',
         'http://localhost:3000',
         'https://ams-infotainment-frontend.vercel.app',
@@ -442,21 +399,6 @@ function ams_afa_sync_show_seasons( $episode_id, $remove_only = false ) {
         } ) );
     }
 
-    // MasVideos_TV_Show::set_seasons() runs `array_multisort(array_column(
-    // $seasons, 'position'), SORT_ASC, $seasons)` on EVERY read of the show
-    // (wp-admin's TV Shows list included) and fatals with "Array sizes are
-    // inconsistent" the moment any entry lacks a `position` key — array_column
-    // silently drops that entry instead of padding it, so the plucked column
-    // comes back shorter than $seasons. 1.20.3's own new-season branch below
-    // never set one. Backfill here, unconditionally, so a show already
-    // carrying that gap self-heals on its very next trash/create/update
-    // instead of needing a separate repair pass.
-    foreach ( $seasons as $i => $season ) {
-        if ( ! isset( $season['position'] ) ) {
-            $seasons[ $i ]['position'] = $i;
-        }
-    }
-
     if ( ! $remove_only ) {
         list( $season_no, ) = ams_afa_label_numbers( get_post_meta( $episode_id, '_episode_number', true ) );
         if ( $season_no < 1 ) {
@@ -480,7 +422,6 @@ function ams_afa_sync_show_seasons( $episode_id, $remove_only = false ) {
                 'episodes'    => array(),
                 'year'        => '',
                 'description' => '',
-                'position'    => count( $seasons ),
             );
             $target = count( $seasons ) - 1;
         }
@@ -509,27 +450,10 @@ function ams_afa_sync_show_seasons( $episode_id, $remove_only = false ) {
             return $order[ $a ] === $order[ $b ] ? $a - $b : $order[ $a ] - $order[ $b ];
         } );
         $seasons = array_values( $seasons );
-
-        // Keep `position` (see the backfill above) true to this reorder — MasVideos
-        // re-sorts by it on every read, so a stale value here would fight this
-        // function's own season-number ordering the next time the show loads.
-        foreach ( $seasons as $i => $season ) {
-            $seasons[ $i ]['position'] = $i;
-        }
     }
 
     if ( $seasons !== $before ) {
         update_post_meta( $show_id, '_seasons', $seasons );
-    }
-
-    // Removing an episode cannot add, remove or reorder seasons, so every
-    // remaining episode's season ARRAY INDEX is unchanged. The old path still
-    // walked the whole show and repaired historical index drift here; on a
-    // 100+ episode show that unrelated work could keep wp_trash_post running
-    // beyond the dashboard's 120s deadline. Full reconciliation still happens
-    // on create/update below, where seasons really can move.
-    if ( $remove_only ) {
-        return;
     }
 
     // 5. Every listed episode's `_tv_show_season_id` must equal its season's
@@ -537,21 +461,6 @@ function ams_afa_sync_show_seasons( $episode_id, $remove_only = false ) {
     //    everyone else's episodes too, and the episode page prints its season
     //    name through this index. Writes only on drift, so the common case is
     //    all no-ops.
-    //
-    // Prime the meta cache for every episode in ONE query first — otherwise
-    // each get_post_meta() below is a separate uncached lookup, and on a
-    // 100-episode show that's up to 100 sequential round trips just to find
-    // the (usually zero) episodes that actually need the update.
-    $all_episode_ids = array();
-    foreach ( $seasons as $season ) {
-        foreach ( $season['episodes'] as $eid ) {
-            $all_episode_ids[] = (int) $eid;
-        }
-    }
-    if ( $all_episode_ids ) {
-        update_meta_cache( 'post', $all_episode_ids );
-    }
-
     foreach ( $seasons as $i => $season ) {
         foreach ( $season['episodes'] as $eid ) {
             if ( (int) get_post_meta( $eid, '_tv_show_season_id', true ) !== $i ) {
@@ -590,138 +499,6 @@ add_action( 'untrashed_post', function ( $post_id ) {
         ams_afa_sync_show_seasons( $post_id );
     }
 }, 10, 1 );
-
-/**
- * Read-only: does the episode's stored `_tv_show_season_id` match where it
- * actually sits in its show's `_seasons` repeater right now? Does NOT run the
- * reconcile itself — just two get_post_meta() reads and a scan of the
- * (already loaded) seasons array. Shared by the explicit `episode/sync`
- * endpoint below (which reconciles first, then calls this to verify) and the
- * `rest_prepare_episode` piggyback (which trusts the reconcile that
- * `rest_after_insert_episode` already ran earlier in the very same request).
- */
-function ams_afa_episode_season_status( $episode_id ) {
-    $show_id = (int) get_post_meta( $episode_id, '_tv_show_id', true );
-    $seasons = maybe_unserialize( get_post_meta( $show_id, '_seasons', true ) );
-    $found   = null;
-    if ( is_array( $seasons ) ) {
-        foreach ( $seasons as $index => $season ) {
-            $episodes = isset( $season['episodes'] ) && is_array( $season['episodes'] )
-                ? array_map( 'intval', $season['episodes'] )
-                : array();
-            if ( in_array( $episode_id, $episodes, true ) ) {
-                $found = (int) $index;
-                break;
-            }
-        }
-    }
-    $stored_index = (int) get_post_meta( $episode_id, '_tv_show_season_id', true );
-    return array(
-        'show_id'      => $show_id,
-        'season_index' => $found,
-        'synced'       => ( null !== $found && $stored_index === $found ),
-    );
-}
-
-/**
- * POST /wp-json/wp/v2/web/episode/sync  { episode_id }
- *
- * Re-run and VERIFY the episode → show `_seasons` reconciliation. The normal
- * rest_after_insert_episode hook remains the first line of defence; this route
- * gives the dashboard a separate, observable repair step when another live
- * callback prevents that hook from completing. It is intentionally one
- * episode at a time and capability-gated to the episode being repaired.
- *
- * Since 1.20.6 the dashboard only reaches this route as a FALLBACK — the
- * common path reads the same verification off the create/update response
- * itself (see the `rest_prepare_episode` filter below) and skips this call.
- */
-add_action( 'rest_api_init', function () {
-    register_rest_route( 'wp/v2/web', 'episode/sync', array(
-        'methods'             => WP_REST_Server::CREATABLE,
-        'permission_callback' => function ( $request ) {
-            $episode_id = (int) $request->get_param( 'episode_id' );
-            return $episode_id > 0 && current_user_can( 'edit_post', $episode_id );
-        },
-        'callback'            => function ( $request ) {
-            $episode_id = (int) $request->get_param( 'episode_id' );
-            if ( 'episode' !== get_post_type( $episode_id ) ) {
-                return new WP_REST_Response( array(
-                    'status'  => 'ERROR',
-                    'message' => 'Episode not found.',
-                ), 200 );
-            }
-            if ( 'publish' !== get_post_status( $episode_id ) ) {
-                return new WP_REST_Response( array(
-                    'status'  => 'ERROR',
-                    'message' => 'Only published episodes can be added to seasons.',
-                ), 200 );
-            }
-
-            ams_afa_sync_show_seasons( $episode_id );
-            $status = ams_afa_episode_season_status( $episode_id );
-
-            if ( ! $status['synced'] ) {
-                error_log( sprintf(
-                    '[ams-afa] episode season sync failed: episode=%d show=%d found=%s stored_index=%d',
-                    $episode_id,
-                    $status['show_id'],
-                    null === $status['season_index'] ? 'no' : (string) $status['season_index'],
-                    (int) get_post_meta( $episode_id, '_tv_show_season_id', true )
-                ) );
-                return new WP_REST_Response( array(
-                    'status'  => 'ERROR',
-                    'message' => 'The episode was saved but could not be attached to its season.',
-                ), 200 );
-            }
-
-            return new WP_REST_Response( array(
-                'status' => 'OK',
-                'data'   => array(
-                    'episode_id'   => $episode_id,
-                    'show_id'      => $status['show_id'],
-                    'season_index' => $status['season_index'],
-                ),
-            ), 200 );
-        },
-        'args'                => array(
-            'episode_id' => array(
-                'required'          => true,
-                'type'              => 'integer',
-                'sanitize_callback' => 'absint',
-            ),
-        ),
-    ) );
-} );
-
-/**
- * Piggyback the season-sync verification onto the episode create/update
- * response itself, so the dashboard doesn't have to make a second HTTP
- * round trip (`web/episode/sync`, above) just to read back what
- * `rest_after_insert_episode` already did moments earlier in this same
- * request. GET requests are untouched — this only runs on the write verbs,
- * and only once the post is at all published (a draft has no season to sit
- * in). Every WordPress REST call here costs a fixed ~4s bootstrap no matter
- * how small the query, so cutting a whole call is worth far more than the
- * two extra get_post_meta() reads this adds to the write it rides along with.
- */
-add_filter( 'rest_prepare_episode', function ( $response, $post, $request ) {
-    if ( ! in_array( $request->get_method(), array( 'POST', 'PUT', 'PATCH' ), true ) ) {
-        return $response;
-    }
-    if ( ! ( $post instanceof WP_Post ) || 'publish' !== $post->post_status ) {
-        return $response;
-    }
-
-    $status = ams_afa_episode_season_status( $post->ID );
-    $data   = $response->get_data();
-    $data['ams_season_sync'] = array(
-        'status'       => $status['synced'] ? 'OK' : 'ERROR',
-        'season_index' => $status['season_index'],
-    );
-    $response->set_data( $data );
-    return $response;
-}, 10, 3 );
 
 /**
  * GET /wp-json/wp/v2/web/episode?id=<id>
@@ -2339,6 +2116,58 @@ add_action( 'rest_api_init', function () {
         ),
     ) );
 } );
+
+/**
+ * Show the dashboard picture inside WordPress too (1.20.1).
+ *
+ * Everything in wp-admin — the Users list, the profile screen, comment lists —
+ * draws avatars through get_avatar_data(), and `pre_get_avatar_data` lets a
+ * plugin answer with its own URL before Gravatar is consulted. Without this the
+ * picture set on /admin/profile was invisible in wp-admin, which read as "it
+ * didn't save". Accounts with no ams_avatar fall through to Gravatar exactly as
+ * before.
+ *
+ * Side effect, deliberate: REST `avatar_urls` now carries the same URL at every
+ * size (the stored rendition is the 150px thumbnail — fine for chips). The
+ * public site renders no avatars, so nothing public changes.
+ */
+function ams_afa_avatar_user_id( $id_or_email ) {
+    if ( is_numeric( $id_or_email ) ) {
+        return (int) $id_or_email;
+    }
+    if ( $id_or_email instanceof WP_User ) {
+        return (int) $id_or_email->ID;
+    }
+    if ( $id_or_email instanceof WP_Post ) {
+        return (int) $id_or_email->post_author;
+    }
+    if ( $id_or_email instanceof WP_Comment ) {
+        if ( (int) $id_or_email->user_id > 0 ) {
+            return (int) $id_or_email->user_id;
+        }
+        $id_or_email = (string) $id_or_email->comment_author_email;
+    }
+    if ( is_string( $id_or_email ) && is_email( $id_or_email ) ) {
+        $user = get_user_by( 'email', $id_or_email );
+        return $user ? (int) $user->ID : 0;
+    }
+    return 0;
+}
+
+function ams_afa_pre_get_avatar_data( $args, $id_or_email ) {
+    $uid = ams_afa_avatar_user_id( $id_or_email );
+    if ( $uid <= 0 ) {
+        return $args;
+    }
+    $url = (string) get_user_meta( $uid, 'ams_avatar_url', true );
+    if ( '' === $url || (int) get_user_meta( $uid, 'ams_avatar_id', true ) <= 0 ) {
+        return $args;
+    }
+    $args['url']          = $url;
+    $args['found_avatar'] = true;
+    return $args;
+}
+add_filter( 'pre_get_avatar_data', 'ams_afa_pre_get_avatar_data', 10, 2 );
 
 /**
  * Program capabilities, answered at runtime via `user_has_cap` (since 1.7.2).

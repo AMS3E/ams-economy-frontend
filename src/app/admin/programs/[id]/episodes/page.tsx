@@ -34,8 +34,6 @@ export default async function ProgramEpisodesTab({
       episodes={episodes}
       linked={program.showId > 0}
       programId={program.id}
-      programSlug={program.slug}
-      showId={program.showId}
       programTitle={program.title}
     />
   );

@@ -31,7 +31,8 @@ request, which is the entire reason the fast path exists (see §4).
   **installed and ACTIVE**. Adds `tv-show-episodes`, `episode`, the
   `/hero-embed` page, the login/token endpoint, `web/featured-program`,
   `web/roles`, the `user_has_cap` program-caps grant, and the `ams_avatar`
-  profile-picture field on users (1.20.0 — core has no writable avatar). Load-bearing for the
+  profile-picture field on users (1.20.0 — core has no writable avatar; 1.20.1
+  also feeds it to wp-admin via `pre_get_avatar_data`). Load-bearing for the
   whole public site — touching it is riskier than touching the fast API.
 - **AMS Fast Read API** — OURS, source at `docs/wordpress/ams-fast-api/`,
   **installed and DEACTIVATED ON PURPOSE** (it is hit by direct URL, so
@@ -208,8 +209,7 @@ was asked. Every one was measured against live production.
   `fast.php` returns failures as HTTP 200 + `ok:false` + status-in-body (auth
   stays a real 401).
 - **Hosting is the company's own Dokploy since 2026-08-07, NOT Vercel** —
-  target hostname `https://eco.amscloud.cc` (legacy `https://info.amscloud.cc`
-  remains live until the Dokploy domain cutover), panel at `deploy.amskh.co`, repo `AMS3E/…`, shipped
+  `https://info.amscloud.cc`, panel at `deploy.amskh.co`, repo `AMS3E/…`, shipped
   as a Docker image, autodeploys on push to `main`. Vercel is taken down, and with
   it the Bot-Protection 429 that used to force headless Chrome for every public
   check: **plain `curl` works against the site again.** The box is shared with
@@ -383,9 +383,12 @@ Two WordPress-side allow-lists gate the frontend, and **both fail as "the
 feature is just broken" with nothing in the logs pointing at them**:
 
 - **The hero iframe needs the frontend origin in `ams_afa_embed_origins()`**
-  (the `frame-ancestors` header) in the AMS Frontend API plugin. The source
-  allows both `eco.amscloud.cc` and legacy `info.amscloud.cc` during cutover.
-  Upload the rebuilt plugin and clear AMS Cache after changing this list.
+  (the `frame-ancestors` header) in the AMS Frontend API plugin. Done for
+  `localhost:3000` and the old Vercel domain — **NOT for `info.amscloud.cc`, so
+  the hero is blank on the live site right now** ("refused to connect" in the
+  iframe). Parked by the owner on 2026-08-10. Edit the LIVE plugin (the repo copy
+  is source-only) and clear AMS Cache afterwards — that clear IS needed here,
+  because the header is baked into cached HTML.
 - **Any client-side fetch needs the origin in the AMS3E-API plugin's CORS
   `$allowed_origins`.**
 
@@ -460,44 +463,3 @@ endpoint (only 2 junk ads exist there today); add the custom domain to
 - Standing decisions, don't revisit: OPcache parked; the three orphan program
   pages stay; the Vercel "Allow WP revalidate webhook" rule is load-bearing;
   media serves the whole library to every role.
-
-## 10. Local WordPress mirror (Local by Flywheel)
-
-There's a local sandbox WP install for this project — Local site nickname
-**"edusit"**, domain **econome.kh**, path `~/Local Sites/edusit/app/public`.
-Its plugin list (`masvideos`, `ams-cache`, `ams-fast-api`, `ams-write-probe`,
-`wp-migrate-db-pro`) matches a pulled-down copy of the economy site, confirming
-it's the sandbox for THIS repo's backend (`.env`'s `NEXT_PUBLIC_WP_ORIGIN`),
-not the `infotainment.ams.com.kh` property §1 otherwise describes — the two
-properties apparently share plugin stock and docs conventions.
-
-**It did NOT have `ams-frontend-api` installed** (the plugin behind every
-episode/season/trash fix in session-log Session 45) — only an unrelated
-"AMS Digital Maketing" plugin under a same-looking `ams/` folder. Installed
-the current source (`docs/wordpress/ams-frontend-api.php`, 1.20.5) to
-`wp-content/plugins/ams-frontend-api/ams-frontend-api.php` on 2026-08-26 as a
-safe place to test the trash-timeout fix before touching production — **still
-needs activating in wp-admin → Plugins once the site is running.**
-
-**Running it:** Local's per-site services (nginx/php/mysql) only listen once
-the site is started **from the Local app GUI** — there's no confirmed headless
-start command, and the ports in `sites.json` are stale until then (checked
-2026-08-26: nginx/mysql weren't listening, and the mysqld that WAS running on
-3306 belonged to something else entirely — probably a system/XAMPP instance,
-since it demanded `auth_gssapi_client`, not Local's bundled MariaDB/MySQL).
-Once started, get the LIVE ports from
-`%APPDATA%\Local\sites.json` → the site's `services.*.ports` (they're
-dynamic per boot, not fixed).
-
-**wp-cli isn't on PATH** — Local bundles it at
-`%LOCALAPPDATA%\Programs\local\resources\extraResources\bin\wp-cli\wp-cli.phar`,
-run with one of Local's bundled PHP binaries (this site: 8.2.29, under
-`%APPDATA%\Local\lightning-services\php-8.2.29+0\bin\win64\php.exe`). That
-CLI build has `mysqli`/`pdo_mysql` compiled but DISABLED by default, and
-`wp-config.php`'s `DB_HOST` is plain `localhost` with no `:port` — the actual
-port only reaches the connection via the site's rendered `php.ini` (templated
-from `conf/php/php.ini.hbs`, not present until the site runs). From a plain
-shell, load the extension and set the port explicitly:
-`php.exe -d extension_dir=...\ext -d extension=mysqli -d extension=pdo_mysql
--d mysqli.default_port=<live port> -d pdo_mysql.default_port=<live port>
-wp-cli.phar --path="<site path>" <command>`.

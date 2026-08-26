@@ -570,7 +570,7 @@ export default function ArticleEditor({
     ? undefined
     : savedStatus === "Published"
       ? wpLink || undefined
-    : `${(process.env.NEXT_PUBLIC_WP_ORIGIN ?? "https://economy.ams.com.kh").replace(/\/+$/, "")}/?p=${post.id}&preview=true`;
+      : `${(process.env.NEXT_PUBLIC_WP_ORIGIN ?? "https://economy.ams.com.kh").replace(/\/+$/, "")}/?p=${post.id}&preview=true`;
 
   /**
    * ONE button, and it commits exactly the status the panel shows.

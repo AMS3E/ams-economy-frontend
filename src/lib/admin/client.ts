@@ -17,7 +17,7 @@
 import { cookies } from "next/headers";
 import { SESSION_COOKIE } from "@/lib/auth/constants";
 
-const BASE = process.env.API_BASE_URL ?? "https://economy.ams.com.kh/wp-json";
+const BASE = process.env.API_BASE_URL ?? "https://infotainment.ams.com.kh/wp-json";
 
 /** No token, or WordPress rejected it (401): the session is gone/expired. The
  *  caller maps this to a redirect to /login. */

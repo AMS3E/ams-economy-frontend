@@ -2,16 +2,30 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { css } from "@/styled-system/css";
 import { ac } from "./tokens";
 import { Icon } from "./icons";
 import { logoutAction } from "@/lib/auth/actions";
+import { fetchMyChip } from "@/lib/admin/screen-actions";
 
 export interface AccountUser {
   name: string;
   initials: string;
   roleLabel: string;
 }
+
+/** What the chip fetches after paint: the picture and the live role label.
+ *  `null` in either slot means "use the fallback" — initials, or the role the
+ *  session cookie recorded at login. */
+export interface ChipData {
+  url: string | null;
+  roleLabel: string | null;
+}
+
+/** Query key shared with ProfileForm, which pushes the new picture URL into
+ *  the cache when it changes — that's what updates this chip without a reload. */
+export const MY_CHIP_QUERY_KEY = ["my-chip"] as const;
 
 /** Identity and sign-out, at the foot of the sidebar.
  *
@@ -21,6 +35,17 @@ export interface AccountUser {
 export default function AccountMenu({ user }: { user: AccountUser }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+
+  // The layout's session cookie carries no avatar and only the login-time role
+  // (it's written once at login), so both are fetched client-side after paint.
+  // staleTime Infinity: the chip mounts once per hard load, and the only thing
+  // that changes the answer mid-session is the profile screen — which updates
+  // this cache directly.
+  const { data: chip } = useQuery<ChipData>({
+    queryKey: MY_CHIP_QUERY_KEY,
+    queryFn: () => fetchMyChip(),
+    staleTime: Infinity,
+  });
 
   // Close on an outside click or Escape. Both listeners are subscriptions, so
   // nothing here sets state synchronously inside the effect body.
@@ -63,19 +88,29 @@ export default function AccountMenu({ user }: { user: AccountUser }) {
           _hover: { background: "var(--colors-admin-surface-hover)", borderColor: "var(--colors-admin-border)" },
           _focusVisible: { outline: "2px solid var(--colors-admin-focus)", outlineOffset: "2px" },
         })}>
-        <span
-          className={css({ width: "30px", height: "30px", borderRadius: "9px", display: "grid", placeItems: "center", fontSize: "11px", fontWeight: 700, flex: "none" })}
-          // An avatar is identity, not a link — it takes the tint without the
-          // accent ink.
-          style={{ background: ac.accentTint, color: ac.text }}>
-          {user.initials}
-        </span>
+        {chip?.url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={chip.url}
+            alt=""
+            className={css({ width: "30px", height: "30px", borderRadius: "9px", objectFit: "cover", flex: "none" })}
+            style={{ background: ac.accentTint }}
+          />
+        ) : (
+          <span
+            className={css({ width: "30px", height: "30px", borderRadius: "9px", display: "grid", placeItems: "center", fontSize: "11px", fontWeight: 700, flex: "none" })}
+            // An avatar is identity, not a link — it takes the tint without the
+            // accent ink.
+            style={{ background: ac.accentTint, color: ac.text }}>
+            {user.initials}
+          </span>
+        )}
         <span className={css({ display: "flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.25, minWidth: 0, flex: 1 })}>
           <span className={css({ fontSize: "13px", fontWeight: 500, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" })}>
             {user.name}
           </span>
           <span className={css({ fontSize: "11px" })} style={{ color: ac.muted }}>
-            {user.roleLabel}
+            {chip?.roleLabel ?? user.roleLabel}
           </span>
         </span>
         <Icon name='chevronDown' size={14} strokeWidth={2} style={{ color: ac.faint, flex: "none", transform: open ? "rotate(180deg)" : undefined }} />

@@ -14,8 +14,6 @@ function add_cors_headers( $headers ) {
         'http://localhost:3000',
         'https://dev.cloudlab.cam',
         'https://ams.com.kh',
-        'https://eco.amscloud.cc',
-        'https://info.amscloud.cc',
     ];
 
     if ( isset( $_SERVER['HTTP_ORIGIN'] ) && in_array( $_SERVER['HTTP_ORIGIN'], $allowed_origins ) ) {
