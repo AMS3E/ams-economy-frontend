@@ -150,6 +150,23 @@ this session already fixed it once. Widened the deadline in
 [program-actions.ts](../src/lib/admin/program-actions.ts) to 45s so it clears
 the read's own worst case.
 
+Both fixes deployed (AFA 1.20.5 uploaded; frontend commit `2f252ba` pushed to
+`main`, Dokploy autodeploy). Next question was general slowness of episode
+edit/save, not another false failure. `adminFetch`'s own dev-timing comment
+already names the cost model: ~4s fixed bootstrap per WordPress REST call
+(OPcache off, 62 plugins re-parsed every time), paid once per call an action
+makes. `createEpisodeAction`/`updateEpisodeAction` each opened with
+`readProgramForEdit(programId)` just to read back `showId` (and `slug`, for
+create) — data the calling page had already fetched one request earlier
+([episodes/page.tsx](../src/app/admin/programs/[id]/episodes/page.tsx) reads
+the full program to build the episode list). That was a fully redundant ~4s+
+WordPress call on every single save. Threaded `showId`/`programSlug` down
+through `EpisodesList` → `EpisodeDialog` as props instead, and both actions
+now take them as parameters — cuts one WP call off every create (4→3) and
+update (3→2). The dropped "Program not found" check is not a regression in
+practice: WordPress's own write is still the real authority, and this is a
+single-admin internal tool, not a multi-tenant boundary.
+
 Creating `S5:E2` on Khmer Insider next hit "Episode created, but WordPress
 didn't confirm it's attached to its season" — the sync step itself, retried
 once at 120s (240s total), still failed. Reading `ams_afa_sync_show_seasons`'s

@@ -146,7 +146,7 @@ export default function KhmerInsiderSidebar({
         >
           {seasons.map((season, index) => (
             <option key={`${season.number}-${index}`} value={index}>
-              {season.number ? `រដូវកាល ${khmerNumber(season.number)}` : "វគ្គទាំងអស់"}
+              {season.number > 0 ? `រដូវកាល ${khmerNumber(season.number)}` : "គ្មានលេខរដូវកាល"}
             </option>
           ))}
         </select>

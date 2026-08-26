@@ -80,7 +80,9 @@ export const seasonOf = (ep: Episode) => numberTuple(ep.episodeNumber)[0] ?? 0;
 export interface Season {
   /** The season number as labelled, 0 for unlabelled episodes. */
   number: number;
-  /** "រដូវកាលទី១". Unlabelled episodes get the catch-all "វគ្គទាំងអស់". */
+  /** "រដូវកាល ១", or "គ្មានលេខរដូវកាល" for the unlabelled group — never
+   *  "វគ្គទាំងអស់" ("all seasons"), which is the wrong word for this group and
+   *  not a convention this site uses. */
   name: string;
   /** Ascending, same order fetchShowEpisodes returns. */
   episodes: Episode[];
@@ -101,7 +103,7 @@ export function groupSeasons(episodes: Episode[]): Season[] {
     .sort((a, b) => b[0] - a[0])
     .map(([number, eps]) => ({
       number,
-      name: number > 0 ? `រដូវកាលទី${toKhmerDigits(number)}` : "វគ្គទាំងអស់",
+      name: number > 0 ? `រដូវកាល ${toKhmerDigits(number)}` : "គ្មានលេខរដូវកាល",
       episodes: eps,
     }));
 }
@@ -223,9 +225,9 @@ function toCard(ep: Episode, programSlug: string): HomeCard {
 /** One season's worth of episode cards for the program overview's season browser
  *  (the tab strip below វគ្គថ្មីៗ). */
 export interface SeasonCards {
-  /** The season number as labelled, 0 for the unlabelled catch-all. */
+  /** The season number as labelled, 0 for the unlabelled group. */
   number: number;
-  /** "រដូវកាលទី១", or "វគ្គទាំងអស់" for the unlabelled group — the tab label. */
+  /** "រដូវកាល ១", or "គ្មានលេខរដូវកាល" for the unlabelled group — the tab label. */
   name: string;
   /** Ascending (E1 first), capped at SEASON_CARD_CAP. */
   cards: HomeCard[];
@@ -240,7 +242,7 @@ const SEASON_CARD_CAP = 30;
 
 /** A show's episodes grouped into per-season card lists for the overview browser.
  *
- *  Tabs read oldest→newest (រដូវកាលទី១, ទី២, …) with the unlabelled catch-all
+ *  Tabs read oldest→newest (រដូវកាល ១, ២, …) with the unlabelled group
  *  last; groupSeasons returns them newest-first, so the order is flipped here.
  *  Within a season the cards keep the show's own ascending order. */
 export function toSeasonCards(episodes: Episode[], programSlug: string): SeasonCards[] {
@@ -373,7 +375,12 @@ function parseEpisodeRailHtml(html: string): RailEpisode[] {
     thumbnail: thumb.replace(SIZE_SUFFIX_RE, ""),
     title: decodeEntities(title).trim(),
     label: (() => {
-      const permalink = href.match(/\/(s\d+e\d+)\/?$/i)?.[1];
+      // The trailing "s<n>e<m>" can be the WHOLE last segment ("/s4e26/", the
+      // older shows) or prefixed with the program's own slug ("/khmer-insider-
+      // s5e1/", confirmed on a freshly-created episode 2026-08-26) — WordPress
+      // doesn't keep one convention, so this matches the pair wherever it sits
+      // at the end of the segment rather than requiring the whole segment.
+      const permalink = href.match(/\/[^/]*?(s\d+e\d+)\/?$/i)?.[1];
       if (permalink) return permalink.toUpperCase().replace(/^S(\d+)E(\d+)$/, "S$1:E$2");
 
       // Some watch pages keep every row on the same program URL and switch
