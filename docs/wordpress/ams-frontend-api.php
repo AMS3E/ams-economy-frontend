@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AMS Frontend API
  * Description: General-purpose endpoints for the AMS Infotainment Next.js frontend (add new ones here as needed). Read-only + a standalone hero-slider embed + the homepage featured-program picker + anonymous REST commenting + per-user login tokens for authenticated writes + program custom-meta exposed to REST + skips AMS Cache's synchronous page warmer on dashboard writes (96s -> under 1s). Self-contained — deactivate/delete anytime with zero effect on anything else.
- * Version:     1.20.5
+ * Version:     1.20.6
  * Author:      Soth Kimleng
  *
  * Standalone "add endpoints as needed" API file, separate from the legacy
@@ -141,6 +141,21 @@
  *        lookups per sync call — plausibly why `web/episode/sync` was still
  *        timing out for Khmer Insider even after the frontend gave it a
  *        120s deadline with one retry (240s total).
+ *        1.20.6 stops making the dashboard pay for verification with a whole
+ *        second HTTP round trip. `rest_after_insert_episode` already runs the
+ *        reconcile inside the SAME create/update request, before the response
+ *        is built — a `rest_prepare_episode` filter now reads back that
+ *        already-fresh state (two cheap get_post_meta() calls, no re-run of
+ *        the reconcile itself) and attaches it as `ams_season_sync` on the
+ *        create/update response body. The dashboard can trust that field and
+ *        skip its separate `web/episode/sync` call entirely on the common
+ *        path — one whole ~4s-minimum WordPress REST round trip saved per
+ *        save, more under host slowness. Falls back to the old explicit call
+ *        when the field is absent (older plugin) or reports drift, so this is
+ *        a pure speed win, not a safety trade — the verification is the exact
+ *        same check `web/episode/sync` already did, just read for free off a
+ *        request the dashboard was making anyway. See
+ *        ams_afa_episode_season_status, shared by both paths.
  *
  *  Anonymous REST comments: WordPress supports anonymous commenting via the
  *        classic wp-comments-post.php but blocks it over REST by default. The
@@ -220,7 +235,7 @@ function ams_afa_hero_aliases() {
 /** Bumped on every release. Part of the embed cache key, so shipping a new
  *  version invalidates every cached frame rather than leaving stale HTML (and a
  *  stale AMS_PARENTS list) behind a deploy. */
-define( 'AMS_AFA_VERSION', '1.20.4' );
+define( 'AMS_AFA_VERSION', '1.20.6' );
 
 /** How long a rendered embed is reused server-side. The cost it avoids is a
  *  ~3.7s WordPress boot; the price is that a slider edited in wp-admin takes up
@@ -577,6 +592,38 @@ add_action( 'untrashed_post', function ( $post_id ) {
 }, 10, 1 );
 
 /**
+ * Read-only: does the episode's stored `_tv_show_season_id` match where it
+ * actually sits in its show's `_seasons` repeater right now? Does NOT run the
+ * reconcile itself — just two get_post_meta() reads and a scan of the
+ * (already loaded) seasons array. Shared by the explicit `episode/sync`
+ * endpoint below (which reconciles first, then calls this to verify) and the
+ * `rest_prepare_episode` piggyback (which trusts the reconcile that
+ * `rest_after_insert_episode` already ran earlier in the very same request).
+ */
+function ams_afa_episode_season_status( $episode_id ) {
+    $show_id = (int) get_post_meta( $episode_id, '_tv_show_id', true );
+    $seasons = maybe_unserialize( get_post_meta( $show_id, '_seasons', true ) );
+    $found   = null;
+    if ( is_array( $seasons ) ) {
+        foreach ( $seasons as $index => $season ) {
+            $episodes = isset( $season['episodes'] ) && is_array( $season['episodes'] )
+                ? array_map( 'intval', $season['episodes'] )
+                : array();
+            if ( in_array( $episode_id, $episodes, true ) ) {
+                $found = (int) $index;
+                break;
+            }
+        }
+    }
+    $stored_index = (int) get_post_meta( $episode_id, '_tv_show_season_id', true );
+    return array(
+        'show_id'      => $show_id,
+        'season_index' => $found,
+        'synced'       => ( null !== $found && $stored_index === $found ),
+    );
+}
+
+/**
  * POST /wp-json/wp/v2/web/episode/sync  { episode_id }
  *
  * Re-run and VERIFY the episode → show `_seasons` reconciliation. The normal
@@ -584,6 +631,10 @@ add_action( 'untrashed_post', function ( $post_id ) {
  * gives the dashboard a separate, observable repair step when another live
  * callback prevents that hook from completing. It is intentionally one
  * episode at a time and capability-gated to the episode being repaired.
+ *
+ * Since 1.20.6 the dashboard only reaches this route as a FALLBACK — the
+ * common path reads the same verification off the create/update response
+ * itself (see the `rest_prepare_episode` filter below) and skips this call.
  */
 add_action( 'rest_api_init', function () {
     register_rest_route( 'wp/v2/web', 'episode/sync', array(
@@ -608,30 +659,15 @@ add_action( 'rest_api_init', function () {
             }
 
             ams_afa_sync_show_seasons( $episode_id );
+            $status = ams_afa_episode_season_status( $episode_id );
 
-            $show_id = (int) get_post_meta( $episode_id, '_tv_show_id', true );
-            $seasons = maybe_unserialize( get_post_meta( $show_id, '_seasons', true ) );
-            $found   = null;
-            if ( is_array( $seasons ) ) {
-                foreach ( $seasons as $index => $season ) {
-                    $episodes = isset( $season['episodes'] ) && is_array( $season['episodes'] )
-                        ? array_map( 'intval', $season['episodes'] )
-                        : array();
-                    if ( in_array( $episode_id, $episodes, true ) ) {
-                        $found = (int) $index;
-                        break;
-                    }
-                }
-            }
-
-            $stored_index = (int) get_post_meta( $episode_id, '_tv_show_season_id', true );
-            if ( null === $found || $stored_index !== $found ) {
+            if ( ! $status['synced'] ) {
                 error_log( sprintf(
                     '[ams-afa] episode season sync failed: episode=%d show=%d found=%s stored_index=%d',
                     $episode_id,
-                    $show_id,
-                    null === $found ? 'no' : (string) $found,
-                    $stored_index
+                    $status['show_id'],
+                    null === $status['season_index'] ? 'no' : (string) $status['season_index'],
+                    (int) get_post_meta( $episode_id, '_tv_show_season_id', true )
                 ) );
                 return new WP_REST_Response( array(
                     'status'  => 'ERROR',
@@ -642,9 +678,9 @@ add_action( 'rest_api_init', function () {
             return new WP_REST_Response( array(
                 'status' => 'OK',
                 'data'   => array(
-                    'episode_id'  => $episode_id,
-                    'show_id'     => $show_id,
-                    'season_index'=> $found,
+                    'episode_id'   => $episode_id,
+                    'show_id'      => $status['show_id'],
+                    'season_index' => $status['season_index'],
                 ),
             ), 200 );
         },
@@ -657,6 +693,35 @@ add_action( 'rest_api_init', function () {
         ),
     ) );
 } );
+
+/**
+ * Piggyback the season-sync verification onto the episode create/update
+ * response itself, so the dashboard doesn't have to make a second HTTP
+ * round trip (`web/episode/sync`, above) just to read back what
+ * `rest_after_insert_episode` already did moments earlier in this same
+ * request. GET requests are untouched — this only runs on the write verbs,
+ * and only once the post is at all published (a draft has no season to sit
+ * in). Every WordPress REST call here costs a fixed ~4s bootstrap no matter
+ * how small the query, so cutting a whole call is worth far more than the
+ * two extra get_post_meta() reads this adds to the write it rides along with.
+ */
+add_filter( 'rest_prepare_episode', function ( $response, $post, $request ) {
+    if ( ! in_array( $request->get_method(), array( 'POST', 'PUT', 'PATCH' ), true ) ) {
+        return $response;
+    }
+    if ( ! ( $post instanceof WP_Post ) || 'publish' !== $post->post_status ) {
+        return $response;
+    }
+
+    $status = ams_afa_episode_season_status( $post->ID );
+    $data   = $response->get_data();
+    $data['ams_season_sync'] = array(
+        'status'       => $status['synced'] ? 'OK' : 'ERROR',
+        'season_index' => $status['season_index'],
+    );
+    $response->set_data( $data );
+    return $response;
+}, 10, 3 );
 
 /**
  * GET /wp-json/wp/v2/web/episode?id=<id>

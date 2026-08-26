@@ -460,3 +460,44 @@ endpoint (only 2 junk ads exist there today); add the custom domain to
 - Standing decisions, don't revisit: OPcache parked; the three orphan program
   pages stay; the Vercel "Allow WP revalidate webhook" rule is load-bearing;
   media serves the whole library to every role.
+
+## 10. Local WordPress mirror (Local by Flywheel)
+
+There's a local sandbox WP install for this project — Local site nickname
+**"edusit"**, domain **econome.kh**, path `~/Local Sites/edusit/app/public`.
+Its plugin list (`masvideos`, `ams-cache`, `ams-fast-api`, `ams-write-probe`,
+`wp-migrate-db-pro`) matches a pulled-down copy of the economy site, confirming
+it's the sandbox for THIS repo's backend (`.env`'s `NEXT_PUBLIC_WP_ORIGIN`),
+not the `infotainment.ams.com.kh` property §1 otherwise describes — the two
+properties apparently share plugin stock and docs conventions.
+
+**It did NOT have `ams-frontend-api` installed** (the plugin behind every
+episode/season/trash fix in session-log Session 45) — only an unrelated
+"AMS Digital Maketing" plugin under a same-looking `ams/` folder. Installed
+the current source (`docs/wordpress/ams-frontend-api.php`, 1.20.5) to
+`wp-content/plugins/ams-frontend-api/ams-frontend-api.php` on 2026-08-26 as a
+safe place to test the trash-timeout fix before touching production — **still
+needs activating in wp-admin → Plugins once the site is running.**
+
+**Running it:** Local's per-site services (nginx/php/mysql) only listen once
+the site is started **from the Local app GUI** — there's no confirmed headless
+start command, and the ports in `sites.json` are stale until then (checked
+2026-08-26: nginx/mysql weren't listening, and the mysqld that WAS running on
+3306 belonged to something else entirely — probably a system/XAMPP instance,
+since it demanded `auth_gssapi_client`, not Local's bundled MariaDB/MySQL).
+Once started, get the LIVE ports from
+`%APPDATA%\Local\sites.json` → the site's `services.*.ports` (they're
+dynamic per boot, not fixed).
+
+**wp-cli isn't on PATH** — Local bundles it at
+`%LOCALAPPDATA%\Programs\local\resources\extraResources\bin\wp-cli\wp-cli.phar`,
+run with one of Local's bundled PHP binaries (this site: 8.2.29, under
+`%APPDATA%\Local\lightning-services\php-8.2.29+0\bin\win64\php.exe`). That
+CLI build has `mysqli`/`pdo_mysql` compiled but DISABLED by default, and
+`wp-config.php`'s `DB_HOST` is plain `localhost` with no `:port` — the actual
+port only reaches the connection via the site's rendered `php.ini` (templated
+from `conf/php/php.ini.hbs`, not present until the site runs). From a plain
+shell, load the extension and set the port explicitly:
+`php.exe -d extension_dir=...\ext -d extension=mysqli -d extension=pdo_mysql
+-d mysqli.default_port=<live port> -d pdo_mysql.default_port=<live port>
+wp-cli.phar --path="<site path>" <command>`.

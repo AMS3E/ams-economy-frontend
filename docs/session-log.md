@@ -5,6 +5,68 @@ general one: Session 14 is the public menu, Session 15 the public fast read
 path, Session 20 the public site's article sliders. Entries are chronological,
 not split by area, because most of them touch both.
 
+## SESSION 46 (2026-08-26): sandboxed the Session 45 trash fix on a local mirror
+
+User hit the exact Session 45 symptom again in the admin UI: trashing the
+`S5:E1 "test gu"` throwaway episode surfaced "Couldn't trash the episode —
+TimeoutError: The operation was aborted due to timeout" despite that session's
+60s poll widening and the AFA 1.20.3→1.20.5 fixes. Rather than re-probe
+production (host bans IPs on heavy REST volume, §3), pointed at the local
+"edusit" WP mirror to test there first.
+
+That mirror turned out to be missing `ams-frontend-api` entirely — confirmed
+it's this repo's sandbox (domain `econome.kh`, matches `.env`'s
+`NEXT_PUBLIC_WP_ORIGIN`, plugin stock matches a `wp-migrate-db-pro` pull of
+economy's production plugins) rather than the `infotainment.ams.com.kh`
+property project-context.md §1 otherwise describes. Installed the current
+1.20.5 source there. Full detail — paths, why headless wp-cli needed
+`-d mysqli.default_port`, why the site has to be started from the Local GUI
+first — now in project-context.md §10 rather than duplicated here.
+
+**Not yet done:** activating the plugin in wp-admin (needs the Local site
+running, which it wasn't during this session) and actually retrying Trash on
+the sandbox to confirm the fix before touching production again.
+
+**Then, same session:** asked to make create/edit/delete episode actually
+faster, not just more forgiving of the host's slowness. Every WordPress REST
+call here pays a fixed ~4s bootstrap no matter how small the query (§4), so
+the number of SEQUENTIAL calls per action is what dominates wall-clock — not
+the SQL inside any one of them. Found two calls that were pure overhead:
+
+1. **`trashEpisodeAction` still did a full `readProgramForEdit()` before
+   every trash**, just to get `showId` for the cache-tag invalidation — the
+   exact redundant-read pattern Session 45 already cut from create/update but
+   missed for trash. `EpisodesList.tsx` already holds `showId` as a prop (it
+   passes it into create/update), so trash now takes it as a parameter
+   instead — one whole WP call removed from every single trash, no plugin
+   change, deployable immediately.
+2. **Create/update episode always followed the actual write with a second,
+   separate `web/episode/sync` call** to verify the show's `_seasons`
+   attachment (the Session 45 safety net) — even though
+   `rest_after_insert_episode` already runs that exact reconcile INSIDE the
+   same create/update request, moments before the response is built. AFA
+   **1.20.6** (`docs/wordpress/ams-frontend-api.php`, zip rebuilt, **not yet
+   uploaded anywhere**) adds a `rest_prepare_episode` filter that reads back
+   the already-fresh state (two cheap `get_post_meta()` calls, no re-run of
+   the reconcile) and rides it on the create/update response as
+   `ams_season_sync: {status, season_index}`. `createEpisode`/`updateEpisode`
+   in [program-edit.ts](../src/lib/admin/program-edit.ts) now return
+   `seasonSynced`, and [program-actions.ts](../src/lib/admin/program-actions.ts)
+   skips the explicit `web/episode/sync` call whenever it's `true` — one whole
+   round trip saved per save, on the common path. Old-plugin/timeout/error
+   cases all fall through to the exact same explicit-sync path as before, so
+   this is a pure speed win layered on top of the existing safety net, not a
+   replacement for it — and the frontend change is safe to ship even before
+   1.20.6 is uploaded (missing `ams_season_sync` just means "fall back",
+   which is today's behavior).
+
+Copied 1.20.6 onto the local sandbox (§10) alongside 1.20.5; same
+not-yet-activated state. `tsc --noEmit`, targeted ESLint, and a full
+production build (229 static pages) all clean. **Still needed:** start the
+sandbox, activate the plugin, exercise create/edit/trash there — including
+confirming `ams_season_sync` actually appears on a real response — before
+uploading 1.20.6 to production.
+
 ## SESSION 45 (2026-08-25): episode saves explicitly verify WordPress `_seasons`
 
 Khmer Insider episode 173476 (`S5:E1`) proved that a committed episode row and

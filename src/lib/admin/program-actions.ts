@@ -271,19 +271,27 @@ function programFail(tag: string, e: unknown, what: string): ProgramCreateResult
   return { ok: false, error: `${what} — ${msg}` };
 }
 
-export async function createEpisodeAction(programId: number, payload: EpisodePayload): Promise<ProgramCreateResult> {
+/** `showId`/`programSlug` come from the page's own already-fetched program
+ *  record (see episodes/page.tsx) instead of this action re-reading it —
+ *  every WordPress REST call here pays a fixed ~4s bootstrap cost with
+ *  OPcache off, so re-fetching data the caller already has just to re-derive
+ *  two fields was a whole extra call on every single episode save. */
+export async function createEpisodeAction(
+  programId: number,
+  showId: number,
+  programSlug: string,
+  payload: EpisodePayload,
+): Promise<ProgramCreateResult> {
   const v = normalizeEpisode(payload);
   if (v.error !== undefined) return { ok: false, error: v.error };
   const { title, season, episode, videoUrl, releaseTs } = v;
 
   try {
-    const program = await readProgramForEdit(programId);
-    if (!program) return { ok: false, error: "Program not found." };
-    if (program.showId <= 0) return { ok: false, error: "This program has no episode collection yet." };
+    if (showId <= 0) return { ok: false, error: "This program has no episode collection yet." };
 
-    const slug = `${program.slug || `program-${program.id}`}-s${season}e${episode}`;
+    const slug = `${programSlug || `program-${programId}`}-s${season}e${episode}`;
     const write = {
-      showId: program.showId,
+      showId,
       label: `S${season}:E${episode}`,
       slug,
       title,
@@ -293,7 +301,7 @@ export async function createEpisodeAction(programId: number, payload: EpisodePay
       thumbId: payload.thumbId,
     };
     const wanted = {
-      showId: program.showId,
+      showId,
       title,
       season,
       episode,
@@ -318,7 +326,7 @@ export async function createEpisodeAction(programId: number, payload: EpisodePay
       };
     }
 
-    let created: { id: number };
+    let created: { id: number; seasonSynced: boolean };
     try {
       created = await createEpisode(write);
     } catch (e) {
@@ -327,7 +335,9 @@ export async function createEpisodeAction(programId: number, payload: EpisodePay
         console.warn(`[createEpisode] recovery mismatch: ${episodeMismatchFields(confirmed.stored, wanted)}`);
         throw e;
       }
-      created = { id: confirmed.stored.id };
+      // The recovery read has no piggybacked verification (it's a plain GET,
+      // not the write response) — always confirm explicitly below.
+      created = { id: confirmed.stored.id, seasonSynced: false };
       const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
       console.warn(`[createEpisode] ${created.id}: ${msg}, but every requested field is stored — treating as success.`);
     }
@@ -335,7 +345,8 @@ export async function createEpisodeAction(programId: number, payload: EpisodePay
     // webhook; mirror it locally so this deployment refreshes even if the
     // webhook is down: the show's episode lists + the episodes index.
     revalidateTag("episodes", "max");
-    revalidateTag(`tv-show:${program.showId}`, "max");
+    revalidateTag(`tv-show:${showId}`, "max");
+    if (created.seasonSynced) return { ok: true, id: created.id };
     try {
       await syncEpisodeOrRetry(created.id);
     } catch (e) {
@@ -381,9 +392,12 @@ export async function loadEpisodeAction(
 
 /** Save an edited episode: title, label, video, date, duration, thumbnail.
  *  The slug and the published status stay put (see EpisodeWrite) so
- *  renumbering never breaks a live URL. */
+ *  renumbering never breaks a live URL. `showId` comes from the page's own
+ *  already-fetched program record (see createEpisodeAction) instead of a
+ *  redundant re-read — it's only needed here to invalidate the right
+ *  `tv-show:<id>` cache tag. */
 export async function updateEpisodeAction(
-  programId: number,
+  showId: number,
   episodeId: number,
   payload: EpisodePayload,
 ): Promise<ProgramCreateResult> {
@@ -392,9 +406,6 @@ export async function updateEpisodeAction(
   const { title, season, episode, videoUrl, releaseTs } = v;
 
   try {
-    const program = await readProgramForEdit(programId);
-    if (!program) return { ok: false, error: "Program not found." };
-
     const wanted = {
       title,
       season,
@@ -404,20 +415,23 @@ export async function updateEpisodeAction(
       runTime: payload.runTime.trim(),
       thumbId: payload.thumbId,
     };
+    let seasonSynced = false;
     try {
-      await updateEpisode(episodeId, {
+      seasonSynced = (await updateEpisode(episodeId, {
         label: `S${season}:E${episode}`,
         title,
         videoUrl,
         releaseTs,
         runTime: wanted.runTime,
         thumbId: wanted.thumbId,
-      });
+      })).seasonSynced;
     } catch (e) {
       // The same host behavior already handled by trashOrConfirm below: WP
       // commits the write, then slow publish/cache hooks outlive the short
       // acknowledgement deadline. Re-read the uncached edit record and trust stored
       // state over a missing HTTP response. A mismatch remains a real error.
+      // The recovery read has no piggybacked verification either (a plain
+      // GET, not the write response) — always confirm explicitly below.
       const confirmed = await confirmEpisodeSave(() => readEpisodeForEdit(episodeId), wanted);
       if (!confirmed.landed) {
         console.warn(`[updateEpisode] ${episodeId} recovery mismatch: ${episodeMismatchFields(confirmed.stored, wanted)}`);
@@ -429,7 +443,8 @@ export async function updateEpisodeAction(
     // Mirror the WP publish webhook locally so this deployment refreshes even
     // if the webhook is down.
     revalidateTag("episodes", "max");
-    if (program.showId > 0) revalidateTag(`tv-show:${program.showId}`, "max");
+    if (showId > 0) revalidateTag(`tv-show:${showId}`, "max");
+    if (seasonSynced) return { ok: true, id: episodeId };
     try {
       await syncEpisodeOrRetry(episodeId);
     } catch (e) {
@@ -484,15 +499,17 @@ async function trashOrConfirm(type: ProgramType | "episode", id: number, timeout
   }
 }
 
-/** Move an episode to the trash — recoverable from wp-admin's Trash. */
-export async function trashEpisodeAction(programId: number, episodeId: number): Promise<ProgramCreateResult> {
+/** Move an episode to the trash — recoverable from wp-admin's Trash.
+ *  `showId` comes from the page's own already-fetched program record (same
+ *  pattern as create/updateEpisodeAction) instead of a redundant
+ *  `readProgramForEdit` — it's only needed here to invalidate the right
+ *  `tv-show:<id>` cache tag, and every WordPress REST call pays a fixed ~4s
+ *  bootstrap cost, so that read was a whole extra call on every trash click. */
+export async function trashEpisodeAction(episodeId: number, showId: number): Promise<ProgramCreateResult> {
   try {
-    const program = await readProgramForEdit(programId);
-    if (!program) return { ok: false, error: "Program not found." };
-
     await trashOrConfirm("episode", episodeId);
     revalidateTag("episodes", "max");
-    if (program.showId > 0) revalidateTag(`tv-show:${program.showId}`, "max");
+    if (showId > 0) revalidateTag(`tv-show:${showId}`, "max");
     return { ok: true, id: episodeId };
   } catch (e) {
     return programFail("trashEpisode", e, "Couldn't trash the episode");

@@ -37,11 +37,15 @@ export default function EpisodesList({
   episodes,
   linked,
   programId,
+  programSlug,
+  showId,
   programTitle,
 }: {
   episodes: AdminEpisode[];
   linked: boolean;
   programId: number;
+  programSlug: string;
+  showId: number;
   programTitle: string;
 }) {
   const router = useRouter();
@@ -81,7 +85,7 @@ export default function EpisodesList({
     if (!ep || trashing) return;
     setTrashing(true);
     setTrashError(null);
-    const res = await trashEpisodeAction(programId, ep.id);
+    const res = await trashEpisodeAction(ep.id, showId);
     setTrashing(false);
     if (!res.ok) {
       setTrashError(res.error ?? "Couldn't trash the episode.");
@@ -169,6 +173,8 @@ export default function EpisodesList({
         <EpisodeDialog
           key={editing?.id ?? "new"}
           programId={programId}
+          programSlug={programSlug}
+          showId={showId}
           episodes={episodes}
           editing={editing}
           onClose={() => {
@@ -422,12 +428,16 @@ function todayPP(): string {
 
 function EpisodeDialog({
   programId,
+  programSlug,
+  showId,
   episodes,
   editing,
   onClose,
   onSaved,
 }: {
   programId: number;
+  programSlug: string;
+  showId: number;
   episodes: AdminEpisode[];
   /** The row being edited; null = create a new episode. */
   editing: AdminEpisode | null;
@@ -502,8 +512,8 @@ function EpisodeDialog({
         thumbId: thumb?.id ?? 0,
       };
       const res = editing
-        ? await updateEpisodeAction(programId, editing.id, payload)
-        : await createEpisodeAction(programId, payload);
+        ? await updateEpisodeAction(showId, editing.id, payload)
+        : await createEpisodeAction(programId, showId, programSlug, payload);
       if (!res.ok) {
         setError(res.error ?? `Couldn't ${editing ? "save" : "create"} the episode.`);
         return;
@@ -529,11 +539,10 @@ function EpisodeDialog({
   };
 
   return (
-    <div className={css({ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "32px" })} style={{ background: ac.overlay }} onClick={onClose}>
+    <div className={css({ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "32px" })} style={{ background: ac.overlay }}>
       <div
         role="dialog"
         aria-label={editing ? "Edit episode" : "New episode"}
-        onClick={(e) => e.stopPropagation()}
         className={css({ width: "min(480px, 100%)", maxHeight: "100%", overflowY: "auto", borderRadius: "14px" })}
         style={{ background: ac.surface, border: `1px solid ${ac.border}`, boxShadow: ac.shadowMd }}
       >

@@ -414,6 +414,20 @@ export interface EpisodeCreateWrite {
   thumbId: number;
 }
 
+/** AMS Frontend API ≥1.20.6 rides the season-sync verification on the same
+ *  create/update response instead of making the dashboard call
+ *  `web/episode/sync` separately to get it — see the plugin's changelog at
+ *  1.20.6. Absent (older plugin) or `status !== "OK"` both mean "don't trust
+ *  this, do the explicit call" — the caller falls back either way. */
+interface EpisodeWriteResponse {
+  id: number;
+  ams_season_sync?: { status: "OK" | "ERROR"; season_index: number | null };
+}
+
+function seasonSyncedFromResponse(data: EpisodeWriteResponse): boolean {
+  return data.ams_season_sync?.status === "OK";
+}
+
 /**
  * Create a PUBLISHED episode attached to a show. Published because the
  * episode endpoints (web/tv-show-episodes, the public episode page) only
@@ -421,8 +435,8 @@ export interface EpisodeCreateWrite {
  * The public site updates itself: the plugin's publish webhook busts
  * `episodes` + `tv-show:<id>` on the episode's publish.
  */
-export async function createEpisode(w: EpisodeCreateWrite): Promise<{ id: number }> {
-  const { data } = await adminFetch<{ id: number }>(`/wp/v2/episode`, {
+export async function createEpisode(w: EpisodeCreateWrite): Promise<{ id: number; seasonSynced: boolean }> {
+  const { data } = await adminFetch<EpisodeWriteResponse>(`/wp/v2/episode`, {
     method: "POST",
     body: {
       title: w.title,
@@ -443,7 +457,7 @@ export async function createEpisode(w: EpisodeCreateWrite): Promise<{ id: number
     // field when this short acknowledgement window expires.
     timeoutMs: 15_000,
   });
-  return { id: data.id };
+  return { id: data.id, seasonSynced: seasonSyncedFromResponse(data) };
 }
 
 interface EpisodeSeasonSyncEnvelope {
@@ -663,8 +677,8 @@ export interface EpisodeWrite {
   thumbId: number;
 }
 
-export async function updateEpisode(id: number, w: EpisodeWrite): Promise<{ id: number }> {
-  const { data } = await adminFetch<{ id: number }>(`/wp/v2/episode/${id}`, {
+export async function updateEpisode(id: number, w: EpisodeWrite): Promise<{ id: number; seasonSynced: boolean }> {
+  const { data } = await adminFetch<EpisodeWriteResponse>(`/wp/v2/episode/${id}`, {
     method: "POST",
     body: {
       title: w.title,
@@ -682,7 +696,7 @@ export async function updateEpisode(id: number, w: EpisodeWrite): Promise<{ id: 
     // uncached stored record. This turns a 120s false error into a ~20s save.
     timeoutMs: 15_000,
   });
-  return { id: data.id };
+  return { id: data.id, seasonSynced: seasonSyncedFromResponse(data) };
 }
 
 /* --- read-only episodes (the plugin's web/tv-show-episodes endpoint) --- */
