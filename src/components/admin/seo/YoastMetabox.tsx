@@ -19,6 +19,7 @@
 import { useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { css } from "@/styled-system/css";
 import { Icon } from "../icons";
+import { BRAND_MARK } from "../brand";
 import { SITE_NAME, SITE_URL } from "@/lib/site";
 
 /* ---- Yoast's own light palette (literals on purpose — see header) ---- */
@@ -164,7 +165,7 @@ function Favicon({ size }: { size: number }) {
       style={{ width: size, height: size, background: "#f1f3f4" }}
     >
       {/* eslint-disable-next-line @next/next/no-img-element -- static asset at favicon size */}
-      <img src="/ams-logo.svg" alt="" width={Math.round(size * 0.64)} height={Math.round(size * 0.64)} className={css({ borderRadius: "4px", display: "block" })} />
+      <img src={BRAND_MARK} alt="" width={Math.round(size * 0.64)} height={Math.round(size * 0.64)} className={css({ borderRadius: "4px", display: "block" })} />
     </span>
   );
 }

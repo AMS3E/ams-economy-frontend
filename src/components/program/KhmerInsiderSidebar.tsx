@@ -89,13 +89,18 @@ const meta = css({ margin: "3px 0 0", fontSize: "10px", lineHeight: 1.4, color: 
  * episode number, not the season number. Prefer the permalink when it carries
  * that distinction and keep the artwork-derived label as the fallback for
  * programs whose links do not encode an episode pair.
+ *
+ * Neither pattern encodes a season on some shows (cambodia-360's live rail,
+ * confirmed 2026-09-01) — the "no season" bucket that used to catch that case
+ * only ever holds season-1-shaped rows in practice, so it collapses into
+ * season 1 instead of a separate "គ្មានលេខរដូវកាល" group.
  */
 function seasonOf(episode: RailEpisode): number {
   const slug = episode.href.split("/").filter(Boolean).at(-1) ?? "";
   const labelledLink = slug.match(/^s(\d+)e\d+$/i);
   if (labelledLink) return Number(labelledLink[1]);
   if (/^e\d+$/i.test(slug)) return 1;
-  return Number(episode.label.match(/^S(\d+)(?::E\d+)?$/i)?.[1] ?? 0);
+  return Number(episode.label.match(/^S(\d+)(?::E\d+)?$/i)?.[1] ?? 1);
 }
 
 export default function KhmerInsiderSidebar({

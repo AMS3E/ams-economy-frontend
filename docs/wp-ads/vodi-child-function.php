@@ -1381,7 +1381,7 @@ add_action('init', function () {
             echo '<loc>' . esc_url(get_permalink($post->ID)) . '</loc>';
             echo '<news:news>';
             echo '<news:publication>';
-            echo '<news:name>AMS Education</news:name>';
+            echo '<news:name>AMS Economy</news:name>';
             echo '<news:language>km</news:language>';
             echo '</news:publication>';
             echo '<news:publication_date>' . get_the_date('c', $post->ID) . '</news:publication_date>';

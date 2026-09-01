@@ -10,6 +10,7 @@
 
 import { useState } from "react";
 import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { logoutAction } from "@/lib/auth/actions";
 import { DEFAULT_STATUSES, type DashRangeSpec } from "./constants";
 import type { PostListResult } from "./posts";
 import type { DashboardData } from "./dashboard";
@@ -98,11 +99,17 @@ export const adminKeys = {
 };
 
 /** GET a BFF route. A 401 means the session died — leave the SPA for the
- *  login page (throwing too so the query settles instead of hanging). */
+ *  login page (throwing too so the query settles instead of hanging).
+ *
+ *  Goes through logoutAction() rather than a plain navigation: it clears the
+ *  httpOnly session cookies server-side first. Without that, the login
+ *  page's own getSession() check trusts the still-present (cached, never
+ *  re-validated) user cookie and bounces straight back to /admin — which
+ *  hits this same dead token again, an infinite /admin ⇄ /login loop. */
 async function bffGet<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { accept: "application/json" }, cache: "no-store" });
   if (res.status === 401) {
-    window.location.assign("/login");
+    await logoutAction();
     throw new Error("Session expired");
   }
   if (!res.ok) {

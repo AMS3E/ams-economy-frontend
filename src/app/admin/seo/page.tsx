@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import SeoListScreen from "@/components/admin/seo/SeoListScreen";
-import { getSession } from "@/lib/auth/session";
+import { getSession, redirectToLogin } from "@/lib/auth/session";
 import { listSeoRows, type SeoListResult } from "@/lib/admin/seo";
 import { AdminAuthError } from "@/lib/admin/client";
 
@@ -23,7 +23,7 @@ export default async function AdminSeoPage({
   try {
     result = await listSeoRows({ page, search: q || undefined, perPage: 20 });
   } catch (e) {
-    if (e instanceof AdminAuthError) redirect("/login");
+    if (e instanceof AdminAuthError) await redirectToLogin();
     // Leave result null — the screen renders its error state.
   }
 

@@ -19,8 +19,8 @@
 // browser — deliberately a separate request so the publish path itself stays
 // byte-for-byte what it was.
 
-import { redirect } from "next/navigation";
 import { adminFetch, AdminAuthError } from "./client";
+import { redirectToLogin } from "@/lib/auth/session";
 
 export interface LegacyPurgePage {
   url: string;
@@ -29,6 +29,10 @@ export interface LegacyPurgePage {
    *  means nobody had visited that page since its last expiry. */
   cached: boolean;
   purged: boolean;
+  /** false = purge-only (afa 1.21.0's sibling episode pages, potentially
+   *  600+): if a browser re-warm step is ever reintroduced, it must skip
+   *  these or a single save would stampede the shared box. */
+  warm?: boolean;
 }
 
 export interface LegacyPurgeResult {
@@ -62,7 +66,7 @@ export async function purgeLegacyCacheAction(postId: number): Promise<LegacyPurg
     if (body?.status === "SKIPPED") return { ok: true, skipped: true, pages: [] };
     return { ok: false, error: body?.message ?? "WordPress couldn't refresh its cache.", pages: [] };
   } catch (e) {
-    if (e instanceof AdminAuthError) redirect("/login");
+    if (e instanceof AdminAuthError) await redirectToLogin();
     return { ok: false, error: "Couldn't reach WordPress to refresh its cache.", pages: [] };
   }
 }

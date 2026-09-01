@@ -8,7 +8,7 @@ export interface ReviveZone {
 
 export const revivePortrait: ReviveZone = {
   zoneId: "1",
-  id: "55aa4b5dd75ab774bd198a60f6c237bc",
+  id: "d76f006be89744f510aa36ab20de12fc",
   width: 390,
   height: 660,
   title: "Revive ad — portrait",
@@ -16,7 +16,7 @@ export const revivePortrait: ReviveZone = {
 
 export const reviveLandscapeShort: ReviveZone = {
   zoneId: "2",
-  id: "55aa4b5dd75ab774bd198a60f6c237bc",
+  id: "d76f006be89744f510aa36ab20de12fc",
   width: 640,
   height: 400,
   title: "Revive ad — half landscape (short)",
@@ -26,7 +26,7 @@ export const reviveLandscapeShort: ReviveZone = {
  *  `@/lib/promos`). */
 export const reviveHalfLandscape: ReviveZone = {
   zoneId: "3",
-  id: "55aa4b5dd75ab774bd198a60f6c237bc",
+  id: "d76f006be89744f510aa36ab20de12fc",
   width: 920,
   height: 570,
   title: "Revive ad — half landscape",
@@ -34,7 +34,7 @@ export const reviveHalfLandscape: ReviveZone = {
 
 export const reviveFullLandscape: ReviveZone = {
   zoneId: "4",
-  id: "55aa4b5dd75ab774bd198a60f6c237bc",
+  id: "d76f006be89744f510aa36ab20de12fc",
   width: 1920,
   height: 800,
   title: "Revive ad — full landscape",

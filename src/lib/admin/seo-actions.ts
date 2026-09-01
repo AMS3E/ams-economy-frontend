@@ -8,11 +8,11 @@
 // ⚠ No `export type` re-exports here — a type re-export in a "use server"
 // file crashes every action in it at dev runtime (opaque digest 500s).
 
-import { redirect } from "next/navigation";
 import { revalidateTag } from "next/cache";
 import { updatePost } from "./post-edit";
 import { AdminAuthError, AdminApiError } from "./client";
 import { safeTag } from "@/lib/api/client";
+import { redirectToLogin } from "@/lib/auth/session";
 
 export interface SeoSaveResult {
   ok: boolean;
@@ -39,7 +39,7 @@ export async function saveSeoAction(
     if (target.published && target.slug) revalidateTag(safeTag(`article:${target.slug}`), "max");
     return { ok: true };
   } catch (e) {
-    if (e instanceof AdminAuthError) redirect("/login");
+    if (e instanceof AdminAuthError) await redirectToLogin();
     return {
       ok: false,
       error:

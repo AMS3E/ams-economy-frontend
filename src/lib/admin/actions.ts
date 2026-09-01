@@ -4,11 +4,11 @@
 // these with a structured payload; they write through core wp/v2/posts as the
 // logged-in user and report a typed result the editor can render.
 
-import { redirect } from "next/navigation";
 import { revalidateTag } from "next/cache";
 import { updatePost, createPost, type PostWrite } from "./post-edit";
 import { AdminAuthError, AdminApiError } from "./client";
 import { safeTag } from "@/lib/api/client";
+import { redirectToLogin } from "@/lib/auth/session";
 
 /** The editable field set. Sent whole; the layer forwards it to WordPress. */
 export interface EditorPayload {
@@ -39,9 +39,12 @@ export interface EditorPayload {
    *  affects WordPress's own archives rather than our landing pages. */
   sticky: boolean;
   /** Post template — the theme file that renders the article's TAIL on the
-   *  WordPress site. "" is WordPress's "Default template", which on this theme
-   *  means nothing renders below the body, so it is a real choice and is always
-   *  sent rather than omitted when empty. */
+   *  WordPress site. "" means "Default template" (no tail) in the editor's own
+   *  UI, but economy.ams.com.kh's `template` REST param is a strict enum of
+   *  named templates only — sending "" 400s with rest_invalid_param (measured
+   *  2026-09-01) rather than clearing it, unlike the sites where this was
+   *  designed. So it is set-or-OMIT here, matching PostWrite.template's own
+   *  contract, not set-or-clear. */
   template: string;
   seo: { title: string; description: string; focus: string };
 }
@@ -71,7 +74,7 @@ function toWrite(p: EditorPayload): PostWrite {
     featured_media: p.featuredMedia,
     password: p.password,
     sticky: p.sticky,
-    template: p.template,
+    ...(p.template ? { template: p.template } : {}),
     meta: {
       _yoast_wpseo_title: p.seo.title,
       _yoast_wpseo_metadesc: p.seo.description,
@@ -93,14 +96,31 @@ function refreshPublic(status: string | undefined, slug: string | undefined, cat
   for (const c of categorySlugs) revalidateTag(safeTag(`category:${c}`), "max");
 }
 
+/** WordPress's own error message out of an AdminApiError body ("Sorry, you are
+ *  not allowed to publish posts as this user." beats a generic "check your
+ *  permissions") — surfaced to the editor's error banner so the real cause is
+ *  visible without needing the server console. */
+function wpMessage(e: AdminApiError): string {
+  try {
+    const parsed = JSON.parse(e.detail) as { message?: string; code?: string };
+    if (typeof parsed.message === "string" && parsed.message) {
+      return parsed.code ? `${parsed.message} (${parsed.code}, HTTP ${e.status})` : `${parsed.message} (HTTP ${e.status})`;
+    }
+  } catch {
+    /* WP's response wasn't JSON (an HTML error page, a proxy 502, …) */
+  }
+  return e.detail ? `HTTP ${e.status}: ${e.detail}` : `WordPress returned HTTP ${e.status}.`;
+}
+
 export async function savePostAction(id: number, payload: EditorPayload): Promise<SaveResult> {
   try {
     const saved = await updatePost(id, toWrite(payload));
     refreshPublic(saved.status, saved.slug, payload.categorySlugs);
     return { ok: true, status: saved.status, slug: saved.slug, link: saved.link };
   } catch (e) {
-    if (e instanceof AdminAuthError) redirect("/login");
-    return { ok: false, error: e instanceof AdminApiError ? "WordPress rejected the save. Check your permissions and try again." : "Couldn't save. Please try again." };
+    if (e instanceof AdminAuthError) await redirectToLogin();
+    if (e instanceof AdminApiError) console.warn(`[savePostAction] WP ${e.status} on ${e.path}: ${e.detail}`);
+    return { ok: false, error: e instanceof AdminApiError ? `WordPress rejected the save — ${wpMessage(e)}` : "Couldn't save. Please try again." };
   }
 }
 
@@ -110,7 +130,8 @@ export async function createPostAction(payload: EditorPayload): Promise<SaveResu
     refreshPublic(saved.status, saved.slug, payload.categorySlugs);
     return { ok: true, id: saved.id, status: saved.status, slug: saved.slug, link: saved.link };
   } catch (e) {
-    if (e instanceof AdminAuthError) redirect("/login");
-    return { ok: false, error: e instanceof AdminApiError ? "WordPress rejected the new article. Check your permissions and try again." : "Couldn't create the article. Please try again." };
+    if (e instanceof AdminAuthError) await redirectToLogin();
+    if (e instanceof AdminApiError) console.warn(`[createPostAction] WP ${e.status} on ${e.path}: ${e.detail}`);
+    return { ok: false, error: e instanceof AdminApiError ? `WordPress rejected the new article — ${wpMessage(e)}` : "Couldn't create the article. Please try again." };
   }
 }

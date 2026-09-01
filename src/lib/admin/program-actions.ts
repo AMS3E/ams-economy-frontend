@@ -5,7 +5,6 @@
 // core wp/v2/movie|tv_show as the logged-in user, and refreshes the public
 // program page's cache tag when the program is live on the site.
 
-import { redirect } from "next/navigation";
 import { revalidateTag } from "next/cache";
 import {
   updateProgram,
@@ -24,6 +23,7 @@ import {
 } from "./program-edit";
 import { AdminAuthError, AdminApiError } from "./client";
 import { programByPostId } from "@/lib/programs";
+import { redirectToLogin } from "@/lib/auth/session";
 
 export interface ProgramPayload {
   title: string;
@@ -86,7 +86,7 @@ export async function createProgramAction(
     if (status === "publish") revalidateTag("program-registry", "max");
     return { ok: true, id: created.id };
   } catch (e) {
-    if (e instanceof AdminAuthError) redirect("/login");
+    if (e instanceof AdminAuthError) await redirectToLogin();
     if (e instanceof AdminApiError) {
       console.warn(`[createProgram] WP ${e.status} on ${e.path}: ${e.detail}`);
       return { ok: false, error: `WordPress rejected the create (${e.status} on ${e.path}). Check the server console for WP's message.` };
@@ -117,7 +117,7 @@ export async function createShowAction(programId: number): Promise<ProgramCreate
     const { showId } = await createShowForProgram({ id: program.id, title: program.title, slug: program.slug });
     return { ok: true, id: showId };
   } catch (e) {
-    if (e instanceof AdminAuthError) redirect("/login");
+    if (e instanceof AdminAuthError) await redirectToLogin();
     if (e instanceof AdminApiError) {
       console.warn(`[createShow] WP ${e.status} on ${e.path}: ${e.detail}`);
       return { ok: false, error: `WordPress rejected it (${e.status}). Check the server console for the reason.` };
@@ -137,6 +137,8 @@ export interface EpisodePayload {
   /** "YYYY-MM-DD" or "". */
   releaseDate: string;
   runTime: string;
+  /** Plain text for the episode page's Description box (the excerpt). */
+  description: string;
   thumbId: number;
 }
 
@@ -168,8 +170,8 @@ function normalizeEpisode(
  *  login, a WP rejection reports its status, anything else (timeout on a slow
  *  publish hook, network drop) surfaces the real reason — this is an internal
  *  tool, a generic "try again" just hides the cause. */
-function programFail(tag: string, e: unknown, what: string): ProgramCreateResult {
-  if (e instanceof AdminAuthError) redirect("/login");
+async function programFail(tag: string, e: unknown, what: string): Promise<ProgramCreateResult> {
+  if (e instanceof AdminAuthError) await redirectToLogin();
   if (e instanceof AdminApiError) {
     console.warn(`[${tag}] WP ${e.status} on ${e.path}: ${e.detail}`);
     return { ok: false, error: `WordPress rejected it (${e.status}). Check the server console for the reason.` };
@@ -197,6 +199,7 @@ export async function createEpisodeAction(programId: number, payload: EpisodePay
       videoUrl,
       releaseTs,
       runTime: payload.runTime.trim(),
+      description: payload.description.trim(),
       thumbId: payload.thumbId,
     });
     // The public episode surfaces are busted by the WP plugin's publish
@@ -206,7 +209,7 @@ export async function createEpisodeAction(programId: number, payload: EpisodePay
     revalidateTag(`tv-show:${program.showId}`, "max");
     return { ok: true, id: created.id };
   } catch (e) {
-    if (e instanceof AdminAuthError) redirect("/login");
+    if (e instanceof AdminAuthError) await redirectToLogin();
     if (e instanceof AdminApiError) {
       console.warn(`[createEpisode] WP ${e.status} on ${e.path}: ${e.detail}`);
       return { ok: false, error: `WordPress rejected the episode (${e.status}). Check the server console for the reason.` };
@@ -228,7 +231,7 @@ export async function loadEpisodeAction(
     if (!episode) return { ok: false, error: "Episode not found — it may have been trashed already." };
     return { ok: true, episode };
   } catch (e) {
-    return programFail("loadEpisode", e, "Couldn't load the episode");
+    return await programFail("loadEpisode", e, "Couldn't load the episode");
   }
 }
 
@@ -254,6 +257,7 @@ export async function updateEpisodeAction(
       videoUrl,
       releaseTs,
       runTime: payload.runTime.trim(),
+      description: payload.description.trim(),
       thumbId: payload.thumbId,
     });
     // Mirror the WP publish webhook locally so this deployment refreshes even
@@ -262,7 +266,7 @@ export async function updateEpisodeAction(
     if (program.showId > 0) revalidateTag(`tv-show:${program.showId}`, "max");
     return { ok: true, id: episodeId };
   } catch (e) {
-    return programFail("updateEpisode", e, "Couldn't save the episode");
+    return await programFail("updateEpisode", e, "Couldn't save the episode");
   }
 }
 
@@ -294,7 +298,7 @@ export async function trashEpisodeAction(programId: number, episodeId: number): 
     if (program.showId > 0) revalidateTag(`tv-show:${program.showId}`, "max");
     return { ok: true, id: episodeId };
   } catch (e) {
-    return programFail("trashEpisode", e, "Couldn't trash the episode");
+    return await programFail("trashEpisode", e, "Couldn't trash the episode");
   }
 }
 
@@ -343,7 +347,7 @@ export async function trashProgramAction(programId: number): Promise<ProgramCrea
     if (program.status === "publish") revalidateTag("program-registry", "max");
     return { ok: true, id: program.id };
   } catch (e) {
-    return programFail("trashProgram", e, "Couldn't trash the program");
+    return await programFail("trashProgram", e, "Couldn't trash the program");
   }
 }
 
@@ -398,7 +402,7 @@ export async function saveProgramAction(
     await bustProgram(id, saved.status === "publish", status !== undefined);
     return { ok: true, status: saved.status };
   } catch (e) {
-    if (e instanceof AdminAuthError) redirect("/login");
+    if (e instanceof AdminAuthError) await redirectToLogin();
     return {
       ok: false,
       error:
@@ -421,7 +425,7 @@ export async function setProgramStatusAction(
     await bustProgram(id, saved.status === "publish", true);
     return { ok: true, status: saved.status };
   } catch (e) {
-    if (e instanceof AdminAuthError) redirect("/login");
+    if (e instanceof AdminAuthError) await redirectToLogin();
     return {
       ok: false,
       error:

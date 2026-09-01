@@ -11,10 +11,10 @@
 // action in the file then 500s with "ReferenceError: X is not defined".
 // Import shared types from their defining module instead.
 
-import { redirect } from "next/navigation";
 import { adminFetch, AdminAuthError } from "./client";
 import { readMedia, type MediaListResult } from "./media";
 import { decodeEntities } from "@/lib/api/mappers";
+import { redirectToLogin } from "@/lib/auth/session";
 
 export interface TagOption {
   id: number;
@@ -31,7 +31,7 @@ export async function searchTags(query: string): Promise<TagOption[]> {
     });
     return (data ?? []).map((t) => ({ id: t.id, name: decodeEntities(t.name).trim() }));
   } catch (e) {
-    if (e instanceof AdminAuthError) redirect("/login");
+    if (e instanceof AdminAuthError) await redirectToLogin();
     return []; // typeahead degrades to no suggestions
   }
 }
@@ -49,7 +49,7 @@ export async function browseMedia(params: { page?: number; search?: string; medi
       mediaType: params.mediaType ?? "image",
     });
   } catch (e) {
-    if (e instanceof AdminAuthError) redirect("/login");
+    if (e instanceof AdminAuthError) await redirectToLogin();
     return null;
   }
 }

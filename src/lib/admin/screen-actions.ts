@@ -6,12 +6,12 @@
 // fetch sees the write with no tag choreography. Only PUBLIC-site tags
 // (articles, featured-program) are still busted here.
 
-import { redirect } from "next/navigation";
 import { revalidateTag } from "next/cache";
 import { adminFetch, AdminAuthError, AdminApiError } from "./client";
 import { updateSettings, updateProfile, readProfile, type SettingsWrite, type ProfileWrite } from "./settings";
 import { createUser, type NewUser } from "./users";
 import { updateMediaAlt, deleteMediaItem } from "./media";
+import { redirectToLogin } from "@/lib/auth/session";
 
 export interface ActionResult {
   ok: boolean;
@@ -20,8 +20,8 @@ export interface ActionResult {
 }
 
 /** Map a thrown error to a result — but let an expired session redirect. */
-function fail(e: unknown, msg: string): ActionResult {
-  if (e instanceof AdminAuthError) redirect("/login");
+async function fail(e: unknown, msg: string): Promise<ActionResult> {
+  if (e instanceof AdminAuthError) await redirectToLogin();
   return { ok: false, error: e instanceof AdminApiError ? msg : "Something went wrong. Please try again." };
 }
 
@@ -46,7 +46,7 @@ export async function createCategory(name: string, parent = 0): Promise<ActionRe
     const { data } = await adminFetch<{ id: number }>("/wp/v2/categories", { method: "POST", body: { name: n, parent } });
     return { ok: true, id: data.id };
   } catch (e) {
-    return fail(e, "Couldn't create the category (the name may already exist).");
+    return await fail(e, "Couldn't create the category (the name may already exist).");
   }
 }
 
@@ -57,7 +57,7 @@ export async function renameCategory(id: number, name: string): Promise<ActionRe
     await adminFetch(`/wp/v2/categories/${id}`, { method: "POST", body: { name: n } });
     return { ok: true };
   } catch (e) {
-    return fail(e, "Couldn't rename the category.");
+    return await fail(e, "Couldn't rename the category.");
   }
 }
 
@@ -77,7 +77,7 @@ export async function setCategoryParent(id: number, parent: number): Promise<Act
     await adminFetch(`/wp/v2/categories/${id}`, { method: "POST", body: { parent } });
     return { ok: true };
   } catch (e) {
-    return fail(e, wpMessage(e) || "Couldn't move the category.");
+    return await fail(e, wpMessage(e) || "Couldn't move the category.");
   }
 }
 
@@ -86,7 +86,7 @@ export async function deleteCategory(id: number): Promise<ActionResult> {
     await adminFetch(`/wp/v2/categories/${id}`, { method: "DELETE", query: { force: true } });
     return { ok: true };
   } catch (e) {
-    return fail(e, "Couldn't delete the category.");
+    return await fail(e, "Couldn't delete the category.");
   }
 }
 
@@ -99,7 +99,7 @@ export async function createTag(name: string): Promise<ActionResult> {
     const { data } = await adminFetch<{ id: number }>("/wp/v2/tags", { method: "POST", body: { name: n } });
     return { ok: true, id: data.id };
   } catch (e) {
-    return fail(e, "Couldn't create the tag (it may already exist).");
+    return await fail(e, "Couldn't create the tag (it may already exist).");
   }
 }
 
@@ -108,7 +108,7 @@ export async function deleteTag(id: number): Promise<ActionResult> {
     await adminFetch(`/wp/v2/tags/${id}`, { method: "DELETE", query: { force: true } });
     return { ok: true };
   } catch (e) {
-    return fail(e, "Couldn't delete the tag.");
+    return await fail(e, "Couldn't delete the tag.");
   }
 }
 
@@ -119,7 +119,7 @@ export async function saveSettings(patch: SettingsWrite): Promise<ActionResult> 
     await updateSettings(patch);
     return { ok: true };
   } catch (e) {
-    return fail(e, "Couldn't save settings. Check your permissions (manage_options).");
+    return await fail(e, "Couldn't save settings. Check your permissions (manage_options).");
   }
 }
 
@@ -128,7 +128,7 @@ export async function saveProfile(patch: ProfileWrite): Promise<ActionResult> {
     await updateProfile(patch);
     return { ok: true };
   } catch (e) {
-    return fail(e, "Couldn't save your profile.");
+    return await fail(e, "Couldn't save your profile.");
   }
 }
 
@@ -140,7 +140,7 @@ export async function setMyAvatar(attachmentId: number): Promise<ActionResult> {
     await updateProfile({ ams_avatar: { id: attachmentId } });
     return { ok: true };
   } catch (e) {
-    return fail(e, "Couldn't update the picture.");
+    return await fail(e, "Couldn't update the picture.");
   }
 }
 
@@ -177,7 +177,7 @@ export async function saveFeaturedProgram(movieId: number, bgImageId: number): P
     revalidateTag("featured-program", "max");
     return { ok: true };
   } catch (e) {
-    return fail(e, "Couldn't save the featured program. Is plugin v1.7.4 deployed?");
+    return await fail(e, "Couldn't save the featured program. Is plugin v1.7.4 deployed?");
   }
 }
 
@@ -196,7 +196,7 @@ export async function createUserAction(fields: NewUser): Promise<ActionResult> {
     const { id } = await createUser({ ...fields, username, email, name: fields.name.trim() });
     return { ok: true, id };
   } catch (e) {
-    if (e instanceof AdminAuthError) redirect("/login");
+    if (e instanceof AdminAuthError) await redirectToLogin();
     if (e instanceof AdminApiError && e.status === 403) {
       return {
         ok: false,
@@ -214,7 +214,7 @@ export async function saveMediaAlt(id: number, alt: string): Promise<ActionResul
     await updateMediaAlt(id, alt.trim());
     return { ok: true };
   } catch (e) {
-    return fail(e, "Couldn't save the alt text. Check your permissions on this file.");
+    return await fail(e, "Couldn't save the alt text. Check your permissions on this file.");
   }
 }
 
@@ -224,7 +224,7 @@ export async function deleteMedia(id: number): Promise<ActionResult> {
     await deleteMediaItem(id);
     return { ok: true };
   } catch (e) {
-    return fail(e, "Couldn't delete the file. It may be protected or your role can't delete others' uploads.");
+    return await fail(e, "Couldn't delete the file. It may be protected or your role can't delete others' uploads.");
   }
 }
 
@@ -236,6 +236,6 @@ export async function trashPost(id: number): Promise<ActionResult> {
     revalidateTag("articles", "max"); // public lists (a published post may have vanished)
     return { ok: true };
   } catch (e) {
-    return fail(e, "Couldn't move the post to trash.");
+    return await fail(e, "Couldn't move the post to trash.");
   }
 }

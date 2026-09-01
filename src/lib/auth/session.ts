@@ -185,6 +185,19 @@ export async function requireSession(): Promise<Session> {
   return session;
 }
 
+/**
+ * Send the browser to /login after WordPress has ALREADY rejected the token
+ * (an AdminAuthError catch) — never after a plain missing session, which has
+ * no cookie to clear. Clears the cookies first: without that, the still-
+ * present (cached, never re-validated) user cookie makes /login's own
+ * getSession() check trust it and bounce straight back to /admin, which hits
+ * the same dead token again — an infinite /admin ⇄ /login loop.
+ */
+export async function redirectToLogin(): Promise<never> {
+  await clearSessionCookie();
+  redirect("/login");
+}
+
 /** Optimistic UI check — the authoritative check is WordPress's own on each call. */
 export function can(user: SessionUser, capability: string): boolean {
   return user.capabilities[capability] === true;
