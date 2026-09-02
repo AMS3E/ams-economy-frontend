@@ -18,6 +18,9 @@ export const SITE_NAME = "AMS ECONOMY";
 
 export const SITE_DESCRIPTION = "AMS Economy — ព័ត៌មានកម្សាន្ត និងជីវិតប្រចាំថ្ងៃ";
 
+/** Square AMS Economy mark used by favicons and compact brand lockups. */
+export const SITE_ICON_URL = "https://s3.ams.com.kh/economy/2023/09/cropped-AMS-ECONOMY-FAVICON-1-180x180.png";
+
 export const SITE_LOGO = "/assets/Logo-Footer.svg";
 
 /** The AMS social accounts, in the order the footer lists them. `name` keys into

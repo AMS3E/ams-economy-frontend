@@ -7,6 +7,7 @@ import { css } from "@/styled-system/css";
 import { ChevronDownIcon, CloseIcon, MenuIcon, SearchIcon, SmartphoneIcon } from "@/components/icons";
 import type { NavSection } from "@/lib/categories";
 import { PROGRAM_ICON_LABEL, type NavPill, type ProgramIcon } from "@/lib/navigation";
+import { SITE_ICON_URL } from "@/lib/site";
 
 // The whole desktop header (SiteHeader) is a Server Component that opens its
 // menus on hover with no JS. That approach can't drive a mobile drawer — a drawer
@@ -271,7 +272,7 @@ export default function MobileNav({ menu, pills, progIcons }: Props) {
           <div className={drawerHead}>
             {/* Same brand mark as the desktop bar. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="https://s3.ams.com.kh/economy/2022/09/AMS-COLOUR-FULL-H28.svg" width={79} height={28} alt="AMS Economy" />
+            <img src={SITE_ICON_URL} width={40} height={40} alt="AMS Economy" className={css({ borderRadius: "9px", display: "block" })} />
             <button ref={closeRef} type="button" aria-label="បិទម៉ឺនុយ" onClick={closeDrawer} className={closeBtn}>
               <CloseIcon size={24} />
             </button>

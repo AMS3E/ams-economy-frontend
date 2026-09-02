@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Battambang } from "next/font/google";
 import Script from "next/script";
-import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/site";
+import { SITE_DESCRIPTION, SITE_ICON_URL, SITE_NAME, SITE_URL } from "@/lib/site";
 import "./globals.css";
 
 // Battambang is used for both Khmer and Latin text. It carries the full weight
@@ -25,9 +25,9 @@ export const metadata: Metadata = {
   },
   description: SITE_DESCRIPTION,
   icons: {
-    icon: [{ url: "https://s3.ams.com.kh/economy/2023/09/cropped-AMS-ECONOMY-FAVICON-1-180x180.png", type: "image/png", sizes: "180x180" }],
-    shortcut: ["https://s3.ams.com.kh/economy/2023/09/cropped-AMS-ECONOMY-FAVICON-1-180x180.png"],
-    apple: [{ url: "https://s3.ams.com.kh/economy/2023/09/cropped-AMS-ECONOMY-FAVICON-1-180x180.png", type: "image/png", sizes: "180x180" }],
+    icon: [{ url: SITE_ICON_URL, type: "image/png", sizes: "180x180" }],
+    shortcut: [SITE_ICON_URL],
+    apple: [{ url: SITE_ICON_URL, type: "image/png", sizes: "180x180" }],
   },
   openGraph: {
     type: "website",

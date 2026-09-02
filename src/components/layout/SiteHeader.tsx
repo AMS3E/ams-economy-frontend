@@ -7,6 +7,7 @@ import MobileNav from "./MobileNav";
 import { ChevronDownIcon, SearchIcon, UserIcon } from "@/components/icons";
 import { getNavPills, getProgramIcons, PROGRAM_ICON_LABEL } from "@/lib/navigation";
 import { getNavMenu } from "@/lib/categories";
+import { SITE_ICON_URL } from "@/lib/site";
 import { container } from "./shared";
 
 // The category menu. It opens on hover and on keyboard focus, so it needs no
@@ -153,9 +154,9 @@ export default async function SiteHeader() {
               below so the two can never drift. It renders nothing on desktop. */}
           <MobileNav menu={menu} pills={pills} progIcons={progIcons} />
           <Link href="/" className={css({ display: "inline-flex", alignItems: "center", flex: "0 0 auto" })}>
-            {/* Official AMS Economy brand logo (SVG on the site's CDN, `economy` bucket). */}
+            {/* Official square AMS Economy mark. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="https://s3.ams.com.kh/economy/2022/09/AMS-COLOUR-FULL-H28.svg" width={79} height={28} alt="AMS Economy" />
+            <img src={SITE_ICON_URL} width={40} height={40} alt="AMS Economy" className={css({ borderRadius: "9px", display: "block" })} />
           </Link>
           {/* Section -> {news, reports}. Flat — Economy's taxonomy has no
               topic tier below its 6 sections, unlike Infotainment's, so the
