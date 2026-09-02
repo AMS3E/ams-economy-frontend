@@ -26,7 +26,10 @@
   html,
   body {
     max-width: 100vw;
-    overflow-x: hidden;
+    /* clip, not hidden: hidden makes body a scroll container, which silently
+       breaks every position:sticky that should pin to the viewport (admin
+       sidebar/top bar, editor toolbars). clip only clips. */
+    overflow-x: clip;
   }
 
   a {
