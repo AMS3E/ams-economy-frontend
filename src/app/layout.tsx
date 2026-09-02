@@ -24,6 +24,11 @@ export const metadata: Metadata = {
     template: "%s — AMS Economy",
   },
   description: SITE_DESCRIPTION,
+  icons: {
+    icon: [{ url: "https://s3.ams.com.kh/economy/2023/09/cropped-AMS-ECONOMY-FAVICON-1-180x180.png", type: "image/png", sizes: "180x180" }],
+    shortcut: ["https://s3.ams.com.kh/economy/2023/09/cropped-AMS-ECONOMY-FAVICON-1-180x180.png"],
+    apple: [{ url: "https://s3.ams.com.kh/economy/2023/09/cropped-AMS-ECONOMY-FAVICON-1-180x180.png", type: "image/png", sizes: "180x180" }],
+  },
   openGraph: {
     type: "website",
     siteName: SITE_NAME,
