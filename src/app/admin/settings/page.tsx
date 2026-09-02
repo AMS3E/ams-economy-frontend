@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { css } from "@/styled-system/css";
 import { ac } from "@/components/admin/tokens";
 import SettingsForm from "@/components/admin/SettingsForm";
-import { getSession, can, redirectToLogin } from "@/lib/auth/session";
+import { getSession, can } from "@/lib/auth/session";
 import { readSettings, type SiteSettings } from "@/lib/admin/settings";
 import { readCategories, type CategoryNode } from "@/lib/admin/categories";
 import { readPrograms, type ProgramItem } from "@/lib/admin/programs";
@@ -39,7 +39,7 @@ export default async function AdminSettingsPage() {
       readFeaturedConfig().catch(() => null),
     ]);
   } catch (e) {
-    if (e instanceof AdminAuthError) await redirectToLogin();
+    if (e instanceof AdminAuthError) redirect("/login");
     throw e;
   }
   return <SettingsForm settings={settings} categories={categories} programs={programs} featured={featured} />;

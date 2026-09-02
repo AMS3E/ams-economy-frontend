@@ -1,9 +1,8 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import ArticleEditor from "@/components/admin/articles/ArticleEditor";
 import { getPostForEdit, listPostTemplates, type EditablePost, type PostTemplate } from "@/lib/admin/post-edit";
 import { readCategories, type CategoryNode } from "@/lib/admin/categories";
 import { AdminAuthError } from "@/lib/admin/client";
-import { redirectToLogin } from "@/lib/auth/session";
 
 // The article editor, loading the real post selected by [id] plus the category
 // tree, both as the logged-in user.
@@ -30,10 +29,10 @@ export default async function AdminArticleEditorPage({
       listPostTemplates(),
     ]);
   } catch (e) {
-    if (e instanceof AdminAuthError) await redirectToLogin();
+    if (e instanceof AdminAuthError) redirect("/login");
     throw e;
   }
 
   if (!post) notFound();
-  return <ArticleEditor mode="edit" post={post} categories={categories} templates={templates} />;
+  return <ArticleEditor post={post} categories={categories} templates={templates} />;
 }

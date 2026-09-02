@@ -11,13 +11,15 @@
 // Write scope: title, description (post_EXCERPT — MasVideos' "Movie short
 // description", which is what /web/program serves as the public page's
 // description; verified live on #221836, 2026-08-27), release date,
-// broadcast schedule, poster and backdrop, and the video source (movies only:
-// a tv_show carries no video of its own — its registered meta is just
-// release/schedule/backdrop). post_content is READ but never written: on
-// newer programs it's a Gutenberg columns + [epsode-carousel] layout canvas
-// the old WP-rendered page depends on, not prose.
-// Status and the `_seasons` repeater are out of scope: status stays whatever
-// it is, seasons stay in WordPress.
+// broadcast schedule, poster and backdrop. The video source and post_content
+// are READ but never written (both cut from the editor on the owner's
+// request, 2026-08-27 — see docs/session-log.md S47): post_content is a
+// Gutenberg columns + [epsode-carousel] layout canvas the old WP-rendered
+// page depends on, not prose, and the _movie_* video meta stays managed in
+// WordPress.
+// Status, poster/backdrop and the `_seasons` repeater are out of scope: status
+// stays whatever it is, artwork waits on the media picker, seasons stay in
+// WordPress.
 
 import { cache } from "react";
 import { adminFetch, AdminApiError } from "./client";
@@ -105,22 +107,6 @@ export interface EditableProgram {
   /** tv_show id addressing the episode list (a movie's _khi_tv_show_id, a
    *  tv_show's own id). 0 = no linked show. */
   showId: number;
-}
-
-/** The excerpt as an editor should see it. wp-admin's block editor stores the
- *  excerpt WITH its <p> wrappers (the déjà vu episode reads "<p>…</p>" raw),
- *  which a textarea must not show. Paragraph breaks become blank lines and
- *  <br> a newline; anything else (rare inline markup) is left alone. Writing
- *  the plain text back renders identically: every excerpt surface — REST's
- *  `rendered`, Vodi's short description — runs wpautop, which re-wraps
- *  blank-line-separated text in <p>. */
-export function excerptToText(raw: string): string {
-  return raw
-    .replace(/\r\n?/g, "\n")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>\s*<p\b[^>]*>/gi, "\n\n")
-    .replace(/<\/?p\b[^>]*>/gi, "")
-    .trim();
 }
 
 function metaStr(meta: Record<string, unknown> | undefined, key: string): string {
@@ -277,8 +263,6 @@ export interface ProgramWrite {
   posterId: number;
   /** Backdrop attachment id (_vodi_*_bg_image); 0 = clear. */
   backdropId: number;
-  /** Present for movies only. */
-  video?: { choice: string; url: string; embed: string };
   /** Omit to leave the status untouched (the plain Save). Setting it is what
    *  puts a program on, or takes it off, the public site. */
   status?: "draft" | "publish";
@@ -301,11 +285,6 @@ export async function updateProgram(
         _tv_show_run_time: patch.schedule,
         _vodi_tv_show_bg_image: patch.backdropId,
       };
-  if (movie && patch.video) {
-    meta._movie_choice = patch.video.choice;
-    meta._movie_url_link = patch.video.url;
-    meta._movie_embed_content = patch.video.embed;
-  }
   const { data } = await adminFetch<{ id: number; status: string }>(`/wp/v2/${type}/${id}`, {
     method: "POST",
     body: {
@@ -348,18 +327,21 @@ export interface ProgramCreateWrite {
   /** draft = dashboard-only; publish = live on the public site (the dynamic
    *  registry routes any published program). */
   status: "draft" | "publish";
+  /** post_excerpt — see ProgramWrite.description. */
   description: string;
   releaseTs: number;
   schedule: string;
   posterId: number;
   backdropId: number;
-  video?: { choice: string; url: string; embed: string };
 }
 
 // WP-side save hooks can be genuinely slow — a PUBLISH-path save was measured
-// at ~79s (tv_show create; draft saves run the normal ~5s). A 120s deadline
-// means a slow hook is a slow success, not an abort.
-const CREATE_TIMEOUT = 120_000;
+// at ~79s (tv_show create; draft saves run the normal ~5s), and 120s proved
+// too tight for real writes: an episode DELETE completed at ~166s and an
+// episode edit-save overran 120s outright (both 2026-08-26), each surfacing
+// as a TimeoutError for a write that then succeeded. 300s means a slow hook
+// is a slow success, not an abort.
+const CREATE_TIMEOUT = 300_000;
 
 /**
  * Create a program = its `movie` post ONLY. The companion `tv_show` (episode
@@ -374,11 +356,6 @@ export async function createProgram(w: ProgramCreateWrite): Promise<{ id: number
     _movie_run_time: w.schedule,
     _vodi_movie_bg_image: w.backdropId,
   };
-  if (w.video) {
-    meta._movie_choice = w.video.choice;
-    meta._movie_url_link = w.video.url;
-    meta._movie_embed_content = w.video.embed;
-  }
 
   const { data: movie } = await adminFetch<{ id: number }>(`/wp/v2/movie`, {
     method: "POST",
@@ -534,6 +511,22 @@ export function parseEpisodeLabel(label: string): { season: number; episode: num
   return { season: 0, episode: bare ? Number(bare[1]) : 0 };
 }
 
+/** The excerpt as an editor should see it. wp-admin's block editor stores the
+ *  excerpt WITH its <p> wrappers (the déjà vu episode reads "<p>…</p>" raw),
+ *  which a textarea must not show. Paragraph breaks become blank lines and
+ *  <br> a newline; anything else (rare inline markup) is left alone. Writing
+ *  the plain text back renders identically: every excerpt surface — REST's
+ *  `rendered`, Vodi's short description — runs wpautop, which re-wraps
+ *  blank-line-separated text in <p>. */
+export function excerptToText(raw: string): string {
+  return raw
+    .replace(/\r\n?/g, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>\s*<p\b[^>]*>/gi, "\n\n")
+    .replace(/<\/?p\b[^>]*>/gi, "")
+    .trim();
+}
+
 interface RawEditEpisode {
   id: number;
   slug?: string;
@@ -619,11 +612,11 @@ export async function getEpisodeForEditFast(id: number, token?: string): Promise
       title: string;
       showId: number;
       label: string;
-      /** post_excerpt. ABSENT from ams-fast-api < 1.8.3 — see the guard below. */
-      excerpt?: string;
       videoUrl: string;
       releaseTs: number;
       runTime: string;
+      /** post_excerpt. ABSENT from ams-fast-api < 1.8.3 — see the guard below. */
+      excerpt?: string;
       thumbId: number;
       thumbUrl: string;
     }>("episode", { id }, { token });

@@ -1,8 +1,7 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import EpisodesList from "@/components/admin/programs/EpisodesList";
 import { readProgramForEdit, readShowEpisodes } from "@/lib/admin/program-edit";
 import { AdminAuthError } from "@/lib/admin/client";
-import { redirectToLogin } from "@/lib/auth/session";
 
 // Episodes tab — list + create. Lists through the plugin's
 // web/tv-show-episodes endpoint; a movie without a linked show gets the
@@ -25,7 +24,7 @@ export default async function ProgramEpisodesTab({
     program = await readProgramForEdit(programId);
     episodes = program?.showId ? await readShowEpisodes(program.showId) : [];
   } catch (e) {
-    if (e instanceof AdminAuthError) await redirectToLogin();
+    if (e instanceof AdminAuthError) redirect("/login");
     throw e;
   }
   if (!program) notFound();

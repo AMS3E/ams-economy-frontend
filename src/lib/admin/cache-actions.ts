@@ -19,8 +19,8 @@
 // browser — deliberately a separate request so the publish path itself stays
 // byte-for-byte what it was.
 
+import { redirect } from "next/navigation";
 import { adminFetch, AdminAuthError } from "./client";
-import { redirectToLogin } from "@/lib/auth/session";
 
 export interface LegacyPurgePage {
   url: string;
@@ -66,7 +66,7 @@ export async function purgeLegacyCacheAction(postId: number): Promise<LegacyPurg
     if (body?.status === "SKIPPED") return { ok: true, skipped: true, pages: [] };
     return { ok: false, error: body?.message ?? "WordPress couldn't refresh its cache.", pages: [] };
   } catch (e) {
-    if (e instanceof AdminAuthError) await redirectToLogin();
+    if (e instanceof AdminAuthError) redirect("/login");
     return { ok: false, error: "Couldn't reach WordPress to refresh its cache.", pages: [] };
   }
 }

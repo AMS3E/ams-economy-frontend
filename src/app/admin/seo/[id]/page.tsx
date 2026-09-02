@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import SeoPanel from "@/components/admin/seo/SeoPanel";
-import { getSession, redirectToLogin } from "@/lib/auth/session";
+import { getSession } from "@/lib/auth/session";
 import { getPostForEdit, type EditablePost } from "@/lib/admin/post-edit";
 import { AdminAuthError } from "@/lib/admin/client";
 
@@ -20,7 +20,7 @@ export default async function AdminSeoDetailPage({
   try {
     post = await getPostForEdit(id);
   } catch (e) {
-    if (e instanceof AdminAuthError) await redirectToLogin();
+    if (e instanceof AdminAuthError) redirect("/login");
     throw e;
   }
   if (!post) notFound();

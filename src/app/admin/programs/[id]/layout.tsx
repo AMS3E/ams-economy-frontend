@@ -1,11 +1,10 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { css } from "@/styled-system/css";
 import ProgramTopBar from "@/components/admin/programs/ProgramTopBar";
 import ProgramEditProvider from "@/components/admin/programs/ProgramEditContext";
 import { readProgramForEdit, type EditableProgram } from "@/lib/admin/program-edit";
 import { AdminAuthError } from "@/lib/admin/client";
 import { programByPostId } from "@/lib/programs";
-import { redirectToLogin } from "@/lib/auth/session";
 
 // Shared frame for a program's edit tabs. Loads the real program (movie or
 // tv_show — the loader probes both) once for the whole editor and hands it to
@@ -28,7 +27,7 @@ export default async function ProgramEditLayout({
   try {
     program = await readProgramForEdit(programId);
   } catch (e) {
-    if (e instanceof AdminAuthError) await redirectToLogin();
+    if (e instanceof AdminAuthError) redirect("/login");
     throw e;
   }
   if (!program) notFound();

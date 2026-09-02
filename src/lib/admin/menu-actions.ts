@@ -13,9 +13,9 @@
 // every successful write busts it — otherwise an editor's reorder would not
 // show up until the revalidate window expired.
 
+import { redirect } from "next/navigation";
 import { revalidateTag } from "next/cache";
 import { adminFetch, AdminAuthError, AdminApiError } from "./client";
-import { redirectToLogin } from "@/lib/auth/session";
 // A VALUE import, not a type re-export: `export type { … }` from a "use server"
 // file crashes every action in it at dev runtime with an opaque digest 500.
 import { ICON_DEFAULTS } from "./menus";
@@ -26,8 +26,8 @@ export interface ActionResult {
   id?: number;
 }
 
-async function fail(e: unknown, msg: string): Promise<ActionResult> {
-  if (e instanceof AdminAuthError) await redirectToLogin();
+function fail(e: unknown, msg: string): ActionResult {
+  if (e instanceof AdminAuthError) redirect("/login");
   if (e instanceof AdminApiError && e.status === 403) {
     return { ok: false, error: "WordPress refused (edit_theme_options). Your role can't edit menus." };
   }
@@ -55,7 +55,7 @@ export async function renameMenuItem(id: number, label: string): Promise<ActionR
     bustPublicMenu();
     return { ok: true };
   } catch (e) {
-    return await fail(e, "Couldn't rename this item.");
+    return fail(e, "Couldn't rename this item.");
   }
 }
 
@@ -67,7 +67,7 @@ export async function setMenuItemUrl(id: number, url: string): Promise<ActionRes
     bustPublicMenu();
     return { ok: true };
   } catch (e) {
-    return await fail(e, "Couldn't update this link.");
+    return fail(e, "Couldn't update this link.");
   }
 }
 
@@ -93,7 +93,7 @@ export async function reorderMenuItems(updates: { id: number; order: number }[])
     bustPublicMenu();
     return { ok: true };
   } catch (e) {
-    return await fail(e, "Couldn't save the new order. Some items may have moved — refresh to see where things stand.");
+    return fail(e, "Couldn't save the new order. Some items may have moved — refresh to see where things stand.");
   }
 }
 
@@ -128,7 +128,7 @@ export async function addMenuItem(menuId: number, label: string, url: string, po
     bustPublicMenu();
     return { ok: true, id: data.id };
   } catch (e) {
-    return await fail(e, "Couldn't add the item.");
+    return fail(e, "Couldn't add the item.");
   }
 }
 
@@ -172,7 +172,7 @@ export async function setMenuItemIcon(
     bustPublicMenu();
     return { ok: true };
   } catch (e) {
-    return await fail(e, iconId ? "Couldn't set the icon." : "Couldn't clear the icon.");
+    return fail(e, iconId ? "Couldn't set the icon." : "Couldn't clear the icon.");
   }
 }
 
@@ -184,6 +184,6 @@ export async function deleteMenuItem(id: number): Promise<ActionResult> {
     bustPublicMenu();
     return { ok: true };
   } catch (e) {
-    return await fail(e, "Couldn't remove the item.");
+    return fail(e, "Couldn't remove the item.");
   }
 }

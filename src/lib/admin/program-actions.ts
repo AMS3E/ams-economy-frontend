@@ -5,6 +5,7 @@
 // core wp/v2/movie|tv_show as the logged-in user, and refreshes the public
 // program page's cache tag when the program is live on the site.
 
+import { redirect } from "next/navigation";
 import { revalidateTag } from "next/cache";
 import {
   updateProgram,
@@ -23,7 +24,6 @@ import {
 } from "./program-edit";
 import { AdminAuthError, AdminApiError } from "./client";
 import { programByPostId } from "@/lib/programs";
-import { redirectToLogin } from "@/lib/auth/session";
 
 export interface ProgramPayload {
   title: string;
@@ -34,8 +34,6 @@ export interface ProgramPayload {
   /** Attachment ids from the media picker; 0 = unset/clear. */
   posterId: number;
   backdropId: number;
-  /** Movies only. */
-  video?: { choice: string; url: string; embed: string };
 }
 
 export interface ProgramSaveResult {
@@ -79,14 +77,13 @@ export async function createProgramAction(
       schedule: payload.schedule.trim(),
       posterId: payload.posterId,
       backdropId: payload.backdropId,
-      video: payload.video,
     });
     // A published create is live routing news — refresh the public registry
     // (poster surfaces + /program/<slug>). Drafts touch nothing public.
     if (status === "publish") revalidateTag("program-registry", "max");
     return { ok: true, id: created.id };
   } catch (e) {
-    if (e instanceof AdminAuthError) await redirectToLogin();
+    if (e instanceof AdminAuthError) redirect("/login");
     if (e instanceof AdminApiError) {
       console.warn(`[createProgram] WP ${e.status} on ${e.path}: ${e.detail}`);
       return { ok: false, error: `WordPress rejected the create (${e.status} on ${e.path}). Check the server console for WP's message.` };
@@ -117,7 +114,7 @@ export async function createShowAction(programId: number): Promise<ProgramCreate
     const { showId } = await createShowForProgram({ id: program.id, title: program.title, slug: program.slug });
     return { ok: true, id: showId };
   } catch (e) {
-    if (e instanceof AdminAuthError) await redirectToLogin();
+    if (e instanceof AdminAuthError) redirect("/login");
     if (e instanceof AdminApiError) {
       console.warn(`[createShow] WP ${e.status} on ${e.path}: ${e.detail}`);
       return { ok: false, error: `WordPress rejected it (${e.status}). Check the server console for the reason.` };
@@ -170,8 +167,8 @@ function normalizeEpisode(
  *  login, a WP rejection reports its status, anything else (timeout on a slow
  *  publish hook, network drop) surfaces the real reason — this is an internal
  *  tool, a generic "try again" just hides the cause. */
-async function programFail(tag: string, e: unknown, what: string): Promise<ProgramCreateResult> {
-  if (e instanceof AdminAuthError) await redirectToLogin();
+function programFail(tag: string, e: unknown, what: string): ProgramCreateResult {
+  if (e instanceof AdminAuthError) redirect("/login");
   if (e instanceof AdminApiError) {
     console.warn(`[${tag}] WP ${e.status} on ${e.path}: ${e.detail}`);
     return { ok: false, error: `WordPress rejected it (${e.status}). Check the server console for the reason.` };
@@ -209,7 +206,7 @@ export async function createEpisodeAction(programId: number, payload: EpisodePay
     revalidateTag(`tv-show:${program.showId}`, "max");
     return { ok: true, id: created.id };
   } catch (e) {
-    if (e instanceof AdminAuthError) await redirectToLogin();
+    if (e instanceof AdminAuthError) redirect("/login");
     if (e instanceof AdminApiError) {
       console.warn(`[createEpisode] WP ${e.status} on ${e.path}: ${e.detail}`);
       return { ok: false, error: `WordPress rejected the episode (${e.status}). Check the server console for the reason.` };
@@ -231,7 +228,7 @@ export async function loadEpisodeAction(
     if (!episode) return { ok: false, error: "Episode not found — it may have been trashed already." };
     return { ok: true, episode };
   } catch (e) {
-    return await programFail("loadEpisode", e, "Couldn't load the episode");
+    return programFail("loadEpisode", e, "Couldn't load the episode");
   }
 }
 
@@ -266,7 +263,7 @@ export async function updateEpisodeAction(
     if (program.showId > 0) revalidateTag(`tv-show:${program.showId}`, "max");
     return { ok: true, id: episodeId };
   } catch (e) {
-    return await programFail("updateEpisode", e, "Couldn't save the episode");
+    return programFail("updateEpisode", e, "Couldn't save the episode");
   }
 }
 
@@ -298,7 +295,7 @@ export async function trashEpisodeAction(programId: number, episodeId: number): 
     if (program.showId > 0) revalidateTag(`tv-show:${program.showId}`, "max");
     return { ok: true, id: episodeId };
   } catch (e) {
-    return await programFail("trashEpisode", e, "Couldn't trash the episode");
+    return programFail("trashEpisode", e, "Couldn't trash the episode");
   }
 }
 
@@ -347,7 +344,7 @@ export async function trashProgramAction(programId: number): Promise<ProgramCrea
     if (program.status === "publish") revalidateTag("program-registry", "max");
     return { ok: true, id: program.id };
   } catch (e) {
-    return await programFail("trashProgram", e, "Couldn't trash the program");
+    return programFail("trashProgram", e, "Couldn't trash the program");
   }
 }
 
@@ -396,13 +393,12 @@ export async function saveProgramAction(
       schedule: payload.schedule.trim(),
       posterId: payload.posterId,
       backdropId: payload.backdropId,
-      video: payload.video,
       status,
     });
     await bustProgram(id, saved.status === "publish", status !== undefined);
     return { ok: true, status: saved.status };
   } catch (e) {
-    if (e instanceof AdminAuthError) await redirectToLogin();
+    if (e instanceof AdminAuthError) redirect("/login");
     return {
       ok: false,
       error:
@@ -425,7 +421,7 @@ export async function setProgramStatusAction(
     await bustProgram(id, saved.status === "publish", true);
     return { ok: true, status: saved.status };
   } catch (e) {
-    if (e instanceof AdminAuthError) await redirectToLogin();
+    if (e instanceof AdminAuthError) redirect("/login");
     return {
       ok: false,
       error:

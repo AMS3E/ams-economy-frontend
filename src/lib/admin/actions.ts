@@ -4,11 +4,11 @@
 // these with a structured payload; they write through core wp/v2/posts as the
 // logged-in user and report a typed result the editor can render.
 
+import { redirect } from "next/navigation";
 import { revalidateTag } from "next/cache";
 import { updatePost, createPost, type PostWrite } from "./post-edit";
 import { AdminAuthError, AdminApiError } from "./client";
 import { safeTag } from "@/lib/api/client";
-import { redirectToLogin } from "@/lib/auth/session";
 
 /** The editable field set. Sent whole; the layer forwards it to WordPress. */
 export interface EditorPayload {
@@ -39,12 +39,8 @@ export interface EditorPayload {
    *  affects WordPress's own archives rather than our landing pages. */
   sticky: boolean;
   /** Post template — the theme file that renders the article's TAIL on the
-   *  WordPress site. "" means "Default template" (no tail) in the editor's own
-   *  UI, but economy.ams.com.kh's `template` REST param is a strict enum of
-   *  named templates only — sending "" 400s with rest_invalid_param (measured
-   *  2026-09-01) rather than clearing it, unlike the sites where this was
-   *  designed. So it is set-or-OMIT here, matching PostWrite.template's own
-   *  contract, not set-or-clear. */
+   *  WordPress site. Economy rejects an empty template value, so "Default"
+   *  is represented by omitting the field. */
   template: string;
   seo: { title: string; description: string; focus: string };
 }
@@ -52,6 +48,10 @@ export interface EditorPayload {
 export interface SaveResult {
   ok: boolean;
   error?: string;
+  /** Autosave only: the session is gone (401). The editor keeps the writer's
+   *  work on screen and says so — it must NOT be bounced to /login mid-write,
+   *  which is what the manual actions' redirect would do. */
+  expired?: boolean;
   /** Present on success — the saved status/slug echoed back from WordPress. */
   status?: string;
   slug?: string;
@@ -60,6 +60,8 @@ export interface SaveResult {
   link?: string;
   /** New post id, on a successful create. */
   id?: number;
+  /** Category ids WordPress actually stored. */
+  categories?: number[];
 }
 
 function toWrite(p: EditorPayload): PostWrite {
@@ -96,42 +98,51 @@ function refreshPublic(status: string | undefined, slug: string | undefined, cat
   for (const c of categorySlugs) revalidateTag(safeTag(`category:${c}`), "max");
 }
 
-/** WordPress's own error message out of an AdminApiError body ("Sorry, you are
- *  not allowed to publish posts as this user." beats a generic "check your
- *  permissions") — surfaced to the editor's error banner so the real cause is
- *  visible without needing the server console. */
-function wpMessage(e: AdminApiError): string {
-  try {
-    const parsed = JSON.parse(e.detail) as { message?: string; code?: string };
-    if (typeof parsed.message === "string" && parsed.message) {
-      return parsed.code ? `${parsed.message} (${parsed.code}, HTTP ${e.status})` : `${parsed.message} (HTTP ${e.status})`;
-    }
-  } catch {
-    /* WP's response wasn't JSON (an HTML error page, a proxy 502, …) */
-  }
-  return e.detail ? `HTTP ${e.status}: ${e.detail}` : `WordPress returned HTTP ${e.status}.`;
-}
-
 export async function savePostAction(id: number, payload: EditorPayload): Promise<SaveResult> {
   try {
-    const saved = await updatePost(id, toWrite(payload));
+    const saved = await updatePost(id, toWrite(payload), true);
     refreshPublic(saved.status, saved.slug, payload.categorySlugs);
-    return { ok: true, status: saved.status, slug: saved.slug, link: saved.link };
+    return { ok: true, status: saved.status, slug: saved.slug, link: saved.link, categories: saved.categories };
   } catch (e) {
-    if (e instanceof AdminAuthError) await redirectToLogin();
-    if (e instanceof AdminApiError) console.warn(`[savePostAction] WP ${e.status} on ${e.path}: ${e.detail}`);
-    return { ok: false, error: e instanceof AdminApiError ? `WordPress rejected the save — ${wpMessage(e)}` : "Couldn't save. Please try again." };
+    if (e instanceof AdminAuthError) redirect("/login");
+    return { ok: false, error: e instanceof AdminApiError ? "WordPress rejected the save. Check your permissions and try again." : "Couldn't save. Please try again." };
+  }
+}
+
+/**
+ * The editor's AUTOSAVE — the WordPress rule, on WordPress's own terms: a
+ * draft the writer owns is simply overwritten, a live article is never
+ * touched (the editor only calls this while WordPress holds `draft`, or for
+ * an article that does not exist yet). Three deliberate differences from the
+ * manual actions above:
+ *   - the status is FORCED to `draft`: the Status radio's intent (Publish,
+ *     Pending, Private) commits only through the button, exactly as
+ *     wp-admin's autosave "does not update the status" — otherwise picking
+ *     Published and waiting a minute would publish;
+ *   - an expired session is REPORTED, not redirected — a redirect would throw
+ *     the writer out of the editor with their work still on screen;
+ *   - no public revalidation: nothing public changed.
+ * `id` null = first activity on a new article: creates the draft, returns its
+ * id, and the editor switches to editing it in place.
+ */
+export async function autosaveArticleAction(id: number | null, payload: EditorPayload): Promise<SaveResult> {
+  try {
+    const write = { ...toWrite(payload), status: "draft" };
+    const saved = id === null ? await createPost(write) : await updatePost(id, write);
+    return { ok: true, id: saved.id, status: saved.status, slug: saved.slug, link: saved.link, categories: saved.categories };
+  } catch (e) {
+    if (e instanceof AdminAuthError) return { ok: false, expired: true, error: "Your session has expired." };
+    return { ok: false, error: e instanceof AdminApiError ? "WordPress rejected the autosave." : "Autosave failed." };
   }
 }
 
 export async function createPostAction(payload: EditorPayload): Promise<SaveResult> {
   try {
-    const saved = await createPost(toWrite(payload));
+    const saved = await createPost(toWrite(payload), true);
     refreshPublic(saved.status, saved.slug, payload.categorySlugs);
-    return { ok: true, id: saved.id, status: saved.status, slug: saved.slug, link: saved.link };
+    return { ok: true, id: saved.id, status: saved.status, slug: saved.slug, link: saved.link, categories: saved.categories };
   } catch (e) {
-    if (e instanceof AdminAuthError) await redirectToLogin();
-    if (e instanceof AdminApiError) console.warn(`[createPostAction] WP ${e.status} on ${e.path}: ${e.detail}`);
-    return { ok: false, error: e instanceof AdminApiError ? `WordPress rejected the new article — ${wpMessage(e)}` : "Couldn't create the article. Please try again." };
+    if (e instanceof AdminAuthError) redirect("/login");
+    return { ok: false, error: e instanceof AdminApiError ? "WordPress rejected the new article. Check your permissions and try again." : "Couldn't create the article. Please try again." };
   }
 }
