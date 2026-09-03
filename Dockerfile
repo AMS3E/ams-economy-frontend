@@ -19,7 +19,14 @@ COPY package.json package-lock.json panda.config.ts ./
 # Dev dependencies are REQUIRED: that same `prepare` script writes
 # src/styled-system (gitignored, so absent from the build context). Without it
 # every `styled-system/*` import fails to resolve.
-RUN npm ci
+#
+# --legacy-peer-deps: npm 10.x (bundled with node:22-bookworm-slim) has a bug
+# resolving @wordpress/theme's OPTIONAL peer "esbuild: >=0.27.2 <1.0.0" — it
+# phantom-resolves the latest matching esbuild (0.28.2) and then fails `npm ci`
+# because that version's platform binaries aren't in the lock, even though the
+# peer is unmet and optional. npm 12 doesn't have this bug, but pinning a newer
+# npm is more moving parts than just skipping peer auto-resolution here.
+RUN npm ci --legacy-peer-deps
 
 # ---- builder ----------------------------------------------------------------
 FROM node:22-bookworm-slim AS builder
