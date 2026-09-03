@@ -11,7 +11,6 @@ import { getLandingPaths, resolveLanding } from "@/lib/categories";
 import { heroAlias } from "@/lib/hero-alias";
 import { getLandingFeed } from "@/lib/landing-data";
 import { getStaticPage, getStaticPagePaths } from "@/lib/pages";
-import { PRERENDER_PUBLIC } from "@/lib/prerender";
 
 // The section and topic LANDING pages: /entertainment-news, /celebrity,
 // /life-style/travel. Eleven in all — two sections and their nine topics.
@@ -47,8 +46,14 @@ type PageParams = Params & { searchParams: Promise<{ [key: string]: string | str
 // ISR: landing pages refresh every 5 minutes, matching the category listings.
 export const revalidate = 3600;
 
+// NOT gated by PRERENDER_PUBLIC, unlike the other six param'd public routes:
+// two of these eleven landing pages read `searchParams` (see LandingPage
+// below), and a path that's dynamicParams-fallback-rendered (unknown at
+// build, `revalidate` set) throws DYNAMIC_SERVER_USAGE as a real 500 instead
+// of degrading to per-request dynamic rendering, under classic ISR (no PPR
+// here — see docs/project-context.md §5). Only ~18 paths (11 landings + 7
+// static pages), cheap enough to always prebuild and never hit that path.
 export async function generateStaticParams() {
-  if (!PRERENDER_PUBLIC) return [];
   const paths = await getLandingPaths();
   return [...paths, ...getStaticPagePaths()].map((path) => ({ path }));
 }
