@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import HomeView from "@/components/home/HomeView";
+import { PRERENDER_PUBLIC } from "@/lib/prerender";
 
 // Page two and beyond of the homepage's ព្រឹត្តិការណ៍ប្រចាំថ្ងៃ pager.
 //
@@ -17,6 +18,7 @@ export const revalidate = 3600;
  * Four more prerendered pages, no extra round trips to WordPress.
  */
 export function generateStaticParams() {
+  if (!PRERENDER_PUBLIC) return [];
   return [{ n: "2" }, { n: "3" }, { n: "4" }, { n: "5" }];
 }
 

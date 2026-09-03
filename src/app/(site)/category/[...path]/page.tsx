@@ -9,6 +9,7 @@ import ArticleRow from "@/components/ui/ArticleRow";
 import CategorySidebar from "@/components/category/CategorySidebar";
 import Pagination from "@/components/category/Pagination";
 import { splitPage } from "./split-page";
+import { PRERENDER_PUBLIC } from "@/lib/prerender";
 
 // A catch-all because WordPress's category permalinks are rewritten and run one
 // to three segments deep: /category/all-news, /category/celebrity/news,
@@ -24,6 +25,7 @@ export const revalidate = 3600;
 // Prebuild every category. The paths come from the API, so a new topic in the
 // CMS starts working without a code change.
 export async function generateStaticParams() {
+  if (!PRERENDER_PUBLIC) return [];
   const terms = await getCategoryTerms();
   return terms.map((t) => ({ path: t.path.split("/") }));
 }

@@ -39,10 +39,14 @@ ARG NEXT_PUBLIC_WP_ORIGIN=https://economy.ams.com.kh
 # Server-only, but the build's prerender pass reads it too (every ISR page is
 # rendered at build time against the live WordPress).
 ARG API_BASE_URL=https://economy.ams.com.kh/wp-json
+# Off by default: see src/lib/prerender.ts. Build-time only — the Dokploy
+# Environment tab is the wrong place for this (docs/project-context.md §6).
+ARG PRERENDER_PUBLIC=0
 
 ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL \
     NEXT_PUBLIC_WP_ORIGIN=$NEXT_PUBLIC_WP_ORIGIN \
     API_BASE_URL=$API_BASE_URL \
+    PRERENDER_PUBLIC=$PRERENDER_PUBLIC \
     NEXT_TELEMETRY_DISABLED=1 \
     NODE_ENV=production
 

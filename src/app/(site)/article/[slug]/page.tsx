@@ -14,6 +14,7 @@ import ShareRow from "@/components/article/ArticleShareSection";
 import ReviveAdSlot from "@/components/ads/revive/ReviveAdSlot";
 import { reviveHalfLandscape } from "@/components/ads/revive/zones";
 import { SITE_LOGO, SITE_NAME, SITE_URL } from "@/lib/site";
+import { PRERENDER_PUBLIC } from "@/lib/prerender";
 
 type Params = { params: Promise<{ slug: string }> };
 
@@ -25,6 +26,7 @@ export const revalidate = 3600;
 // WordPress REST call carries ~3.9s of fixed overhead, and these are the
 // articles most likely to be linked from the homepage and the feeds.
 export async function generateStaticParams() {
+  if (!PRERENDER_PUBLIC) return [];
   const slugs = await getRecentArticleSlugs(100);
   return slugs.map((slug) => ({ slug }));
 }

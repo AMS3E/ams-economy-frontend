@@ -2,6 +2,10 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactCompiler: true,
+  // Default is 60s per page. Belt-and-braces for whatever still renders at
+  // build time (PRERENDER_PUBLIC=1, or the admin's own prerender pass) —
+  // see docs/session-log.md Session 39.
+  staticPageGenerationTimeout: 300,
   // Emits .next/standalone — a self-contained server.js plus only the traced
   // node_modules — which is what the Docker image runs on the Dokploy host.
   // Inert on Vercel, so it is safe to leave on while both deployments exist.
