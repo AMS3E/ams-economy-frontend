@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AMS Frontend API
  * Description: General-purpose endpoints for the AMS Infotainment Next.js frontend (add new ones here as needed). Read-only + a standalone hero-slider embed + the homepage featured-program picker + anonymous REST commenting + per-user login tokens for authenticated writes + program custom-meta exposed to REST + skips AMS Cache's synchronous page warmer on dashboard writes (96s -> under 1s). Self-contained — deactivate/delete anytime with zero effect on anything else.
- * Version:     1.23.0
+ * Version:     1.24.0
  * Author:      Soth Kimleng
  *
  * Standalone "add endpoints as needed" API file, separate from the legacy
@@ -311,7 +311,7 @@ function ams_afa_hero_aliases() {
 /** Bumped on every release. Part of the embed cache key, so shipping a new
  *  version invalidates every cached frame rather than leaving stale HTML (and a
  *  stale AMS_PARENTS list) behind a deploy. */
-define( 'AMS_AFA_VERSION', '1.23.0' );
+define( 'AMS_AFA_VERSION', '1.24.0' );
 
 /** How long a rendered embed is reused server-side. The cost it avoids is a
  *  ~3.7s WordPress boot; the price is that a slider edited in wp-admin takes up
@@ -342,8 +342,13 @@ function ams_afa_embed_origins() {
         // in Session 31 §5, fixed here in 1.11.0 because the popup fix below
         // is unobservable in production while the frame itself is blocked.
         'https://info.amscloud.cc',
+        // Production domain was renamed to eco.amscloud.cc; kept info.amscloud.cc
+        // above rather than replacing it in case anything still resolves there.
+        'https://eco.amscloud.cc',
         'http://localhost:3000',
         'https://ams-infotainment-frontend.vercel.app',
+        // Vercel preview/staging project for the economy frontend (added 1.24.0).
+        'https://ams-economy-frontend.vercel.app',
     );
 }
 
