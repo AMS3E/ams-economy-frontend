@@ -85,3 +85,16 @@
 .editor-styles-wrapper .block-editor-block-list__block {
   scroll-margin-top: 160px;
 }
+
+/* Gallery block, "Columns" set to 2: every image rendered full-width, one per
+ * row, instead of two-up. block-library's own style.css defines explicit
+ * width rules for .columns-1 and .columns-3 through .columns-8 on the modern
+ * (has-nested-images) gallery markup — .columns-2 is simply absent from the
+ * shipped stylesheet (checked node_modules/@wordpress/block-library/build-style/style.css).
+ * There is an unqualified fallback rule that computes the same 50% width, but
+ * it carries lower specificity than WP's own .columns-N rules, so it loses to
+ * whatever else is in play. Same formula WP uses for .columns-3 etc., just
+ * with an explicit .columns-2 in the selector so it actually wins. */
+.editor-styles-wrapper .wp-block-gallery.has-nested-images.columns-2 figure.wp-block-image:not(#individual-image) {
+  width: calc(50% - var(--wp--style--unstable-gallery-gap, 16px) * 0.5);
+}
