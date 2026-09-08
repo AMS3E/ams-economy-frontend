@@ -41,6 +41,51 @@ function statusDisplay(raw: string): Status {
 }
 const labelOf = (opts: Option[], value: string) => opts.find((o) => o.value === value)?.label ?? value;
 
+/**
+ * The FALLBACK when resolving a row's real permalink fails (or hasn't landed
+ * yet): WordPress's own ID-based form, `/?p={id}`. It needs no slug/category
+ * knowledge and WordPress always resolves it correctly (redirecting a
+ * published post to its pretty permalink), but it is not what a person wants
+ * to actually SEE in an address bar or paste into Slack — see resolvePostLink.
+ */
+const WP_ORIGIN = process.env.NEXT_PUBLIC_WP_ORIGIN ?? "https://economy.ams.com.kh";
+const idHref = (id: number, status: string) => `${WP_ORIGIN}/?p=${id}${status === "publish" ? "" : "&preview=true"}`;
+
+/**
+ * The row's real, pretty permalink — category path, Custom Permalinks
+ * overrides and all. The list's own rows never carry this (they come from the
+ * fast SQL path, which structurally cannot compute it — see getPostLink's
+ * doc comment), so View/Copy URL resolve it on click, one round trip for the
+ * one row asked about. Falls back to the id-based form on any failure, so a
+ * flaky request never leaves the button simply doing nothing.
+ */
+async function resolvePostLink(id: number, status: string): Promise<string> {
+  try {
+    const res = await fetch(`/api/admin/posts/${id}/link`);
+    if (res.ok) {
+      const body = (await res.json()) as { link?: string };
+      if (body.link) return body.link;
+    }
+  } catch {
+    // network hiccup — fall through to the always-correct fallback below
+  }
+  return idHref(id, status);
+}
+
+const rowActionClass = css({
+  fontSize: "11.5px",
+  fontWeight: 500,
+  cursor: "pointer",
+  background: "none",
+  border: "none",
+  padding: 0,
+  margin: 0,
+  font: "inherit",
+  // Underline only — color stays whatever the caller set inline (muted for
+  // View/Edit/Copy, danger for Trash), so hovering Trash never reads as safe.
+  _hover: { textDecoration: "underline" },
+});
+
 interface Query { search: string; status: string; category: string; author: string; date: string; page: number }
 
 export default function ArticlesView({
@@ -81,6 +126,30 @@ export default function ArticlesView({
   // a rejection lands in it rather than in a native alert.
   const [confirmTrash, setConfirmTrash] = useState<{ id: number; title: string; status: string } | null>(null);
   const [trashError, setTrashError] = useState<string | null>(null);
+  // Which row's URL was just copied — swaps that row's "Copy URL" label to
+  // "Copied!" for a moment. Cleared by id so a stale timer from a since-copied
+  // OTHER row can't blank out a fresher one.
+  const [copiedId, setCopiedId] = useState<number | null>(null);
+  // Resolved real permalinks, by post id — populated on hover (prefetchLink)
+  // so "View" can be a genuine <a href>, not a button faking one. A real
+  // anchor gets the browser's own new-tab/copy-link-address/status-bar-preview
+  // behavior for free; a JS window.open() stand-in does not.
+  const [linkCache, setLinkCache] = useState<Record<number, string>>({});
+
+  const prefetchLink = (id: number, status: string) => {
+    if (linkCache[id]) return;
+    void resolvePostLink(id, status).then((link) => {
+      setLinkCache((prev) => (prev[id] ? prev : { ...prev, [id]: link }));
+    });
+  };
+
+  const copyUrl = async (e: React.MouseEvent, id: number, status: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    void navigator.clipboard?.writeText(linkCache[id] ?? (await resolvePostLink(id, status)));
+    setCopiedId(id);
+    window.setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 1500);
+  };
 
   // Row-level "move to trash". Lives on the row (a Link), so the handler must
   // swallow the navigation.
@@ -260,7 +329,15 @@ export default function ArticlesView({
                 </tr>
               ) : (
                 items.map((a) => (
-                  <Tr key={a.id} className={css({ "&:hover [data-go]": { opacity: 1, transform: "translateX(0)" }, "&:hover [data-thumb]": { borderColor: "var(--colors-admin-border-strong)" } })}>
+                  <Tr
+                    key={a.id}
+                    onMouseEnter={() => prefetchLink(a.id, a.status)}
+                    onFocus={() => prefetchLink(a.id, a.status)}
+                    className={css({
+                      "&:hover [data-go], &:focus-within [data-go]": { opacity: 1, transform: "translateX(0)" },
+                      "&:hover [data-thumb]": { borderColor: "var(--colors-admin-border-strong)" },
+                    })}
+                  >
                     <Td>
                       {a.thumb ? (
                         // eslint-disable-next-line @next/next/no-img-element -- admin-only thumbnail; next/image would need remotePatterns for the S3 host
@@ -273,6 +350,39 @@ export default function ArticlesView({
                       <Link href={`/admin/articles/${a.id}`} className={css({ fontSize: "14.5px", lineHeight: 1.55, lineClamp: 2, display: "block", _hover: { textDecoration: "underline" } })}>
                         {a.title}
                       </Link>
+                      {/* WordPress's own row-actions pattern: hidden until the row
+                          is hovered, then a pipe-separated line of what you can
+                          do to THIS post without opening it. */}
+                      <div data-go className={css({ display: "flex", alignItems: "center", gap: "6px", height: "15px", marginTop: "4px", opacity: 0, transition: "opacity .14s ease" })}>
+                        <a
+                          href={linkCache[a.id] ?? idHref(a.id, a.status)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className={rowActionClass}
+                          style={{ color: ac.muted }}
+                        >
+                          {a.status === "publish" ? "View" : "Preview"}
+                        </a>
+                        <span aria-hidden style={{ color: ac.border }}>|</span>
+                        <Link href={`/admin/articles/${a.id}`} className={rowActionClass} style={{ color: ac.muted }}>
+                          Edit
+                        </Link>
+                        <span aria-hidden style={{ color: ac.border }}>|</span>
+                        <button type="button" onClick={(e) => copyUrl(e, a.id, a.status)} className={rowActionClass} style={{ color: ac.muted }}>
+                          {copiedId === a.id ? "Copied!" : "Copy URL"}
+                        </button>
+                        <span aria-hidden style={{ color: ac.border }}>|</span>
+                        <button
+                          type="button"
+                          disabled={trashingId !== null}
+                          onClick={(e) => trash(e, a.id, a.title, a.status)}
+                          className={rowActionClass}
+                          style={{ color: ac.danger }}
+                        >
+                          {trashingId === a.id ? "Trashing…" : "Trash"}
+                        </button>
+                      </div>
                     </Td>
                     <Td>
                       <span className={css({ fontSize: "12.5px", lineHeight: 1.6, lineClamp: 2, display: "block" })} style={{ color: ac.muted }}>{a.categoryNames.join(", ")}</span>
@@ -285,21 +395,11 @@ export default function ArticlesView({
                     </Td>
                     <Td><StatusPill status={statusDisplay(a.status)} /></Td>
                     <Td align="right">
-                      <span className={css({ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "4px" })}>
-                        <button
-                          type="button"
-                          data-go
-                          disabled={trashingId !== null}
-                          onClick={(e) => trash(e, a.id, a.title, a.status)}
-                          aria-label={`Move “${a.title}” to trash`}
-                          className={css({ width: "26px", height: "26px", borderRadius: "7px", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "none", background: "transparent", opacity: 0, transition: "opacity .14s ease, transform .14s ease, color .12s", _hover: { background: "var(--colors-admin-danger-tint)", color: "var(--colors-admin-danger)" }, _focusVisible: { opacity: 1, transform: "translateX(0)", outline: "2px solid var(--colors-admin-focus)", outlineOffset: "2px" } })}
-                          style={{ transform: "translateX(-4px)", color: trashingId === a.id ? ac.danger : ac.faint }}
-                        >
-                          <Icon name="trash" size={14} strokeWidth={1.7} />
-                        </button>
-                        <span data-go className={css({ display: "flex", opacity: 0, transition: "opacity .14s ease, transform .14s ease" })} style={{ transform: "translateX(-4px)", color: ac.faint }}>
-                          <Icon name="chevronRight" size={15} strokeWidth={2} />
-                        </span>
+                      {/* The trash action moved into the title's row-actions
+                          line below; this chevron is only the "opens on click"
+                          affordance, so it keeps its own hover-reveal. */}
+                      <span data-go className={css({ display: "flex", justifyContent: "flex-end", opacity: 0, transition: "opacity .14s ease, transform .14s ease" })} style={{ transform: "translateX(-4px)", color: ac.faint }}>
+                        <Icon name="chevronRight" size={15} strokeWidth={2} />
                       </span>
                     </Td>
                   </Tr>

@@ -193,6 +193,25 @@ export async function getPostForEdit(id: number): Promise<EditablePost | null> {
   };
 }
 
+/**
+ * Just the real permalink for one post — category path, Custom Permalinks
+ * overrides and all, exactly what `getPostForEdit` reads into `link` above.
+ *
+ * The Articles LIST never has this: its rows come from the fast SQL path
+ * (posts.ts), which — deliberately, see fast.php's `ams_fast_permalink` — only
+ * ever knows the post's id, not the permalink structure a full WP bootstrap
+ * would resolve. So the list's row actions (View / Copy URL) call this on
+ * click, one REST round trip for the one row the user actually asked about,
+ * rather than resolving all 20 rows' links up front.
+ */
+export async function getPostLink(id: number, token?: string): Promise<string> {
+  const { data } = await adminFetch<{ id: number; link?: string }>(`/wp/v2/posts/${id}`, {
+    token,
+    query: { context: "edit", _fields: "id,link" },
+  });
+  return data?.link ?? "";
+}
+
 /** What a write echoes back. `link` is the permalink WordPress computed for the
  *  state it just stored — on a publish, the final pretty URL — which is how the
  *  editor's preview control gets the live-site address without a reload. */
