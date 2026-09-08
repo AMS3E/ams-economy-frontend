@@ -4,6 +4,7 @@ import { css, cx } from "@/styled-system/css";
 import { ac } from "@/components/admin/tokens";
 import { ADMIN_FONT_STACK, adminFont } from "@/components/admin/font";
 import LoginForm from "@/components/admin/LoginForm";
+import DigitalDepartmentCredit from "@/components/admin/DigitalDepartmentCredit";
 import { getValidatedSession } from "@/lib/auth/session";
 
 export const metadata: Metadata = {
@@ -29,14 +30,28 @@ export default async function LoginPage() {
         css({
           minHeight: "100vh",
           display: "flex",
+          flexDirection: "column",
           alignItems: "center",
-          justifyContent: "center",
           padding: "24px",
         }),
       )}
       style={{ background: ac.canvas, color: ac.text, fontFamily: ADMIN_FONT_STACK }}
     >
-      <LoginForm />
+      {/* The card and its credit line share one column so the credit is exactly
+          as wide as the card and reads as its caption, not as page furniture.
+          That column is centred in the space left over; the copyright is page
+          furniture and sits at the bottom of the viewport. */}
+      <div className={css({ flex: 1, width: "100%", display: "flex", alignItems: "center", justifyContent: "center" })}>
+        <div className={css({ width: "100%", maxWidth: "380px", display: "flex", flexDirection: "column", gap: "18px" })}>
+          <LoginForm />
+          <DigitalDepartmentCredit />
+        </div>
+      </div>
+      {/* Year computed here, on the server, so the footer never ships a stale
+          build-time constant. */}
+      <p className={css({ fontSize: "12px", lineHeight: 1.6, textAlign: "center", margin: 0, paddingTop: "24px" })} style={{ color: ac.muted }}>
+        Copyright © {new Date().getFullYear()} AMS Economy
+      </p>
     </main>
   );
 }

@@ -1,9 +1,13 @@
+"use client";
+
+import { useState } from "react";
 import Link from "next/link";
 import { css, cx } from "@/styled-system/css";
 import { footerCols, footerLegal, newsletter, type FooterLink } from "@/lib/home-data";
 import { SOCIALS } from "@/lib/site";
 import { container } from "./shared";
 import SocialIcon from "@/components/ui/SocialIcon";
+import { CreditModal } from "@/components/admin/DigitalDepartmentCredit";
 
 const linkStyle = css({
   color: "#949cb0",
@@ -37,6 +41,8 @@ function FooterAnchor({ link, className }: { link: FooterLink; className: string
 
 /** Shared site footer (used on every page via the layout). */
 export default function SiteFooter() {
+  const [creditOpen, setCreditOpen] = useState(false);
+
   return (
     <footer
       className={css({
@@ -184,8 +190,27 @@ export default function SiteFooter() {
             }),
           )}
         >
-          <div className={css({ color: "#a6a6a6", fontSize: "13px" })}>
-            ឆ្នាំ2020 - 2024 © រក្សាសិទ្ធិគ្រប់យ៉ាងដោយ៖ អគ្គនាយកដ្ឋានវិទ្យុ និងទូរទស្សន៍អប្សរា | អភិវឌ្ឍដោយ Apsara Media Services
+          <div className={css({ display: "flex", flexDirection: "column", gap: "4px" })}>
+            <div className={css({ color: "#a6a6a6", fontSize: "13px" })}>
+              ឆ្នាំ2020 - 2024 © រក្សាសិទ្ធិគ្រប់យ៉ាងដោយ៖ អគ្គនាយកដ្ឋានវិទ្យុ និងទូរទស្សន៍អប្សរា | អភិវឌ្ឍដោយ{" "}
+              <button
+                type="button"
+                onClick={() => setCreditOpen(true)}
+                className={css({
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  font: "inherit",
+                  color: "inherit",
+                  cursor: "pointer",
+                  textDecoration: "underline",
+                  textUnderlineOffset: "2px",
+                })}
+              >
+                Digital Department
+              </button>
+            </div>
+            <div className={css({ color: "#c2c2c2", fontSize: "12px" })}>Copyright © {new Date().getFullYear()} AMS Economy</div>
           </div>
           <div className={css({ display: "flex", gap: "20px", flexWrap: "wrap" })}>
             {footerLegal.map((l) => (
@@ -194,6 +219,7 @@ export default function SiteFooter() {
           </div>
         </div>
       </div>
+      {creditOpen ? <CreditModal onClose={() => setCreditOpen(false)} /> : null}
     </footer>
   );
 }
