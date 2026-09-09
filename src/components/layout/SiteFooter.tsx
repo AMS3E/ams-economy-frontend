@@ -210,7 +210,7 @@ export default function SiteFooter() {
                 Digital Department
               </button>
             </div>
-            <div className={css({ color: "#c2c2c2", fontSize: "12px" })}>Copyright © {new Date().getFullYear()} AMS Economy</div>
+            <div className={css({ color: "#c2c2c2", fontSize: "12px" })}>© {new Date().getFullYear()} Apsara Media Services CO., LTD. All rights reserved.</div>
           </div>
           <div className={css({ display: "flex", gap: "20px", flexWrap: "wrap" })}>
             {footerLegal.map((l) => (

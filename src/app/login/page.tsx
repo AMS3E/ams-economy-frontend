@@ -50,7 +50,7 @@ export default async function LoginPage() {
       {/* Year computed here, on the server, so the footer never ships a stale
           build-time constant. */}
       <p className={css({ fontSize: "12px", lineHeight: 1.6, textAlign: "center", margin: 0, paddingTop: "24px" })} style={{ color: ac.muted }}>
-        Copyright © {new Date().getFullYear()} AMS Economy
+        © {new Date().getFullYear()} Apsara Media Services CO., LTD. All rights reserved.
       </p>
     </main>
   );
