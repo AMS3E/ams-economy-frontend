@@ -31,6 +31,19 @@ export default defineConfig({
           "0%": { backgroundPosition: "100% 0" },
           "100%": { backgroundPosition: "0% 0" },
         },
+        // The sign-in credit's department modal: backdrop fades, the panel
+        // settles in from slightly below, and each tier of the org chart rises
+        // into place on a stagger (DigitalDepartmentCredit.tsx). All three are
+        // gated behind `_motionReduce` at the call sites.
+        adminFadeIn: { from: { opacity: 0 }, to: { opacity: 1 } },
+        adminZoomIn: {
+          from: { opacity: 0, transform: "scale(0.96) translateY(10px)" },
+          to: { opacity: 1, transform: "none" },
+        },
+        adminRise: {
+          from: { opacity: 0, transform: "translateY(16px)" },
+          to: { opacity: 1, transform: "none" },
+        },
       },
 
       tokens: {
