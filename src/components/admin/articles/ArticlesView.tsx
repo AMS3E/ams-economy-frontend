@@ -54,7 +54,7 @@ const idHref = (id: number, status: string) => `${WP_ORIGIN}/?p=${id}${status ==
 /**
  * The row's real, pretty permalink — category path, Custom Permalinks
  * overrides and all. The list's own rows never carry this (they come from the
- * fast SQL path, which structurally cannot compute it — see getPostLink's
+ * fast SQL path, which structurally cannot compute it — see getPostPermalink's
  * doc comment), so View/Copy URL resolve it on click, one round trip for the
  * one row asked about. Falls back to the id-based form on any failure, so a
  * flaky request never leaves the button simply doing nothing.

@@ -773,8 +773,6 @@ export function Tr({
   children: ReactNode;
   selected?: boolean;
   className?: string;
-  /** E.g. prefetching a row's on-demand data before its hover-revealed
-   *  actions are actually clicked (see ArticlesView's row-actions line). */
   onMouseEnter?: () => void;
   onFocus?: () => void;
 }) {

@@ -13,9 +13,9 @@ export const BRAND_MARK = SITE_ICON_URL;
 export const BRAND_MARK_W = 40;
 export const BRAND_MARK_H = 40;
 
-/** The AMS Economy lockup: the mark, with the site name set beside it.
+/** The AMS Education lockup: the mark, with the name set beside it.
  *
- *  The site name is TEXT rather than part of the artwork. That is what lets it
+ *  The wordmark is TEXT rather than part of the artwork. That is what lets it
  *  recolour per theme — a baked-in black wordmark disappears on the dark rail,
  *  which is exactly the trap the previous PNG lockup fell into and needed a
  *  second file to escape.
@@ -34,10 +34,10 @@ export function BrandLockup({ className }: { className?: string }) {
       />
       {/* Tracked out so it reads as a deliberate lockup rather than a caption
           tacked on next to the mark. */}
-      <span
-        className={css({ fontSize: "11px", fontWeight: 600, letterSpacing: "0.145em", textTransform: "uppercase" })}
-        style={{ color: ac.faint }}
-      >
+        <span
+          className={css({ fontSize: "11px", fontWeight: 600, letterSpacing: "0.145em", textTransform: "uppercase" })}
+          style={{ color: ac.faint }}
+        >
         Economy
       </span>
     </span>
